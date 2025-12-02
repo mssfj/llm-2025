@@ -1,0 +1,27 @@
+[project]
+name = "llmcomp"
+version = "0.1.0"
+description = "Matsuo Lab LLM Competition Pipeline"
+requires-python = ">=3.10"
+
+dependencies = [
+    "transformers",
+    "accelerate",
+    "datasets",
+    "trl",
+    "peft",
+    "bitsandbytes",
+    "sentencepiece",
+    "evaluate",
+    "wandb",
+    "tiktoken",
+    "scikit-learn",
+    "numpy",
+    "einops"
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest",
+    "ipykernel",
+]
