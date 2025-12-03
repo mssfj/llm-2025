@@ -17,7 +17,9 @@ dependencies = [
     "tiktoken",
     "scikit-learn",
     "numpy",
-    "einops"
+    "einops",
+    "unsloth>=2025.11.1",
+    "setuptools>=80.9.0",
 ]
 
 [tool.uv]
