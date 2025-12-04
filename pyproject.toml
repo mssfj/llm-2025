@@ -18,8 +18,8 @@ dependencies = [
     "scikit-learn",
     "numpy",
     "einops",
-    "unsloth>=2025.11.1",
-    "setuptools>=80.9.0",
+    "unsloth",
+    "setuptools",
 ]
 
 [tool.uv]

@@ -13,7 +13,9 @@ MAX_SEQ_LENGTH = 2048
 WANDB_PROJECT = "llm-lecture-2025-sft"
 WANDB_ENTITY = "mssfj-1"
 WANDB_RUNNAME = "sft-run-unsloth"
-OUTPUT_DIR = "/workspace/llm-2025"
+MODEL_DIR = "/workspace/model"
+CHECKPOINT_DIR = "/workspace/checkpoints"
+LOG_DIR = "/workspace/logs"
 
 # ========= Model & Tokenizer (Unsloth) =========
 # 4bit量子化とモデル読み込みを同時に行います
@@ -123,7 +125,7 @@ wandb.init(project=WANDB_PROJECT, entity=WANDB_ENTITY, name=WANDB_RUNNAME)
 
 # SFT設定
 sft_config = SFTConfig(
-    output_dir=f"{OUTPUT_DIR}/outputs_unsloth",
+    output_dir=f"{CHECKPOINT_DIR}/checkpoints_unsloth",
     per_device_train_batch_size=2,
     gradient_accumulation_steps=4,
     learning_rate=2e-4,
@@ -134,7 +136,7 @@ sft_config = SFTConfig(
     eval_strategy="steps",
     save_strategy="epoch",
     optim="adamw_8bit",
-    report_to="wandb",
+    report_to=f"wandb",
     seed=3407,
 )
 
@@ -158,6 +160,6 @@ trainer.train()
 
 # ========= 保存 =========
 # Unsloth専用の保存メソッドを使用 (GGUF変換などもここから可能)
-model.save_pretrained(f"{OUTPUT_DIR}/lora_model_unsloth")
-tokenizer.save_pretrained(f"{OUTPUT_DIR}/lora_model_unsloth")
+model.save_pretrained(f"{MODEL_DIR}/lora_model_unsloth")
+tokenizer.save_pretrained(f"{MODEL_DIR}/lora_model_unsloth")
 print("Training finished and model saved.")

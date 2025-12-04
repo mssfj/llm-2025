@@ -1,0 +1,70 @@
+_wandb:
+    value:
+        cli_version: 0.23.0
+        e:
+            epms678awow9d5cmqtgzglodbgflo7tc:
+                codePath: scripts/sft-unsloth.py
+                codePathLocal: scripts/sft-unsloth.py
+                cpu_count: 32
+                cpu_count_logical: 64
+                cudaVersion: "12.4"
+                disk:
+                    /:
+                        total: "34359738368"
+                        used: "8388194304"
+                email: mss.fujimoto+1@gmail.com
+                executable: /workspace/llm-2025/.venv/bin/python3
+                git:
+                    commit: 055ea3ee6112e3835c9ceef7b2596b7c9ef66690
+                    remote: https://github.com/mssfj/llm-2025.git
+                gpu: NVIDIA GeForce RTX 4090
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ada
+                      cudaCores: 16384
+                      memoryTotal: "25757220864"
+                      name: NVIDIA GeForce RTX 4090
+                      uuid: GPU-8b698d4e-2518-a629-39a2-bc696b1532a4
+                host: 17b110886b39
+                memory:
+                    total: "270290886656"
+                os: Linux-6.5.0-35-generic-x86_64-with-glibc2.35
+                program: /workspace/llm-2025/scripts/sft-unsloth.py
+                python: CPython 3.10.18
+                root: /workspace/llm-2025
+                startedAt: "2025-12-04T11:20:21.080642Z"
+                writerId: epms678awow9d5cmqtgzglodbgflo7tc
+        m: []
+        python_version: 3.10.18
+        t:
+            "1":
+                - 1
+                - 5
+                - 11
+                - 41
+                - 49
+                - 51
+                - 53
+                - 71
+                - 83
+                - 84
+                - 98
+            "2":
+                - 1
+                - 5
+                - 11
+                - 41
+                - 49
+                - 51
+                - 53
+                - 71
+                - 83
+                - 84
+                - 98
+            "3":
+                - 13
+            "4": 3.10.18
+            "5": 0.23.0
+            "6": 4.57.2
+            "12": 0.23.0
+            "13": linux-x86_64

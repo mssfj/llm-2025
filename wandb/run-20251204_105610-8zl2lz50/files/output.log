@@ -1,0 +1,47 @@
+[34m[1mwandb[0m: Detected [huggingface_hub.inference] in use.
+[34m[1mwandb[0m: Use W&B Weave for improved LLM call tracing. Install Weave with `pip install weave` then add `import weave` to the top of your script.
+[34m[1mwandb[0m: For more information, check out the docs at: https://weave-docs.wandb.ai/
+Unsloth: Tokenizing ["text"] (num_proc=64): 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 483/483 [00:18<00:00, 26.04 examples/s]
+num_proc must be <= 27. Reducing num_proc to 27 for dataset of size 27.
+[datasets.arrow_dataset|WARNING]num_proc must be <= 27. Reducing num_proc to 27 for dataset of size 27.
+Unsloth: Tokenizing ["text"] (num_proc=27): 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 27/27 [00:07<00:00,  3.48 examples/s]
+Starting Unsloth training...
+The model is already on multiple devices. Skipping the move to device specified in `args`.
+==((====))==  Unsloth - 2x faster free finetuning | Num GPUs used = 1
+   \\   /|    Num examples = 483 | Num Epochs = 2 | Total steps = 122
+O^O/ \_/ \    Batch size per device = 2 | Gradient accumulation steps = 4
+\        /    Data Parallel GPUs = 1 | Total batch size (2 x 4 x 1) = 8
+ "-____-"     Trainable parameters = 41,943,040 of 8,072,204,288 (0.52% trained)
+  8%|██████████████                                                                                                                                                              | 10/122 [00:23<02:34,  1.38s/it]Unsloth: Not an error, but LlamaForCausalLM does not accept `num_items_in_batch`.
+{'loss': 2.7541, 'grad_norm': 2.087409257888794, 'learning_rate': 0.00013846153846153847, 'epoch': 0.17}
+Using gradient accumulation will be very slightly less accurate.
+Read more on gradient accumulation issues here: https://unsloth.ai/blog/gradient
+ 50%|██████████████████████████████████████████████████████████████████████████████████████                                                                                      | 61/122 [01:34<02:13,  2.19s/it]`rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=8192
+100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 122/122 [02:55<00:00,  1.23s/it]`rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=8192
+{'eval_loss': 1.5094740390777588, 'eval_runtime': 1.2363, 'eval_samples_per_second': 21.839, 'eval_steps_per_second': 5.662, 'epoch': 0.17}
+{'loss': 1.0812, 'grad_norm': 0.8853130340576172, 'learning_rate': 0.0001889908256880734, 'epoch': 0.33}
+{'eval_loss': 0.7872527837753296, 'eval_runtime': 0.7504, 'eval_samples_per_second': 35.98, 'eval_steps_per_second': 9.328, 'epoch': 0.33}
+{'loss': 0.7917, 'grad_norm': 0.8065876364707947, 'learning_rate': 0.0001706422018348624, 'epoch': 0.5}
+{'eval_loss': 0.7304370999336243, 'eval_runtime': 0.7492, 'eval_samples_per_second': 36.037, 'eval_steps_per_second': 9.343, 'epoch': 0.5}
+{'loss': 0.7473, 'grad_norm': 0.76866614818573, 'learning_rate': 0.00015229357798165138, 'epoch': 0.66}
+{'eval_loss': 0.6972293257713318, 'eval_runtime': 0.7465, 'eval_samples_per_second': 36.168, 'eval_steps_per_second': 9.377, 'epoch': 0.66}
+{'loss': 0.7045, 'grad_norm': 0.6329913139343262, 'learning_rate': 0.00013394495412844036, 'epoch': 0.83}
+{'eval_loss': 0.6799701452255249, 'eval_runtime': 0.7499, 'eval_samples_per_second': 36.003, 'eval_steps_per_second': 9.334, 'epoch': 0.83}
+{'loss': 0.6943, 'grad_norm': 0.535162627696991, 'learning_rate': 0.00011559633027522936, 'epoch': 0.99}
+{'eval_loss': 0.6511321067810059, 'eval_runtime': 0.7474, 'eval_samples_per_second': 36.125, 'eval_steps_per_second': 9.366, 'epoch': 0.99}
+{'loss': 0.568, 'grad_norm': 0.7632933855056763, 'learning_rate': 9.724770642201836e-05, 'epoch': 1.15}
+100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 122/122 [02:57<00:00,  1.45s/it]
+{'eval_loss': 0.6197850108146667, 'eval_runtime': 0.7697, 'eval_samples_per_second': 35.079, 'eval_steps_per_second': 9.095, 'epoch': 1.15}
+{'loss': 0.5358, 'grad_norm': 0.6865327954292297, 'learning_rate': 7.889908256880735e-05, 'epoch': 1.31}
+{'eval_loss': 0.5677419304847717, 'eval_runtime': 0.761, 'eval_samples_per_second': 35.478, 'eval_steps_per_second': 9.198, 'epoch': 1.31}
+{'loss': 0.5065, 'grad_norm': 0.6950795650482178, 'learning_rate': 6.055045871559634e-05, 'epoch': 1.48}
+{'eval_loss': 0.5642575621604919, 'eval_runtime': 0.7515, 'eval_samples_per_second': 35.929, 'eval_steps_per_second': 9.315, 'epoch': 1.48}
+{'loss': 0.4594, 'grad_norm': 0.5374504327774048, 'learning_rate': 4.2201834862385324e-05, 'epoch': 1.64}
+{'eval_loss': 0.5622175931930542, 'eval_runtime': 0.7532, 'eval_samples_per_second': 35.846, 'eval_steps_per_second': 9.293, 'epoch': 1.64}
+{'loss': 0.46, 'grad_norm': 0.517713725566864, 'learning_rate': 2.3853211009174313e-05, 'epoch': 1.81}
+{'eval_loss': 0.5608556270599365, 'eval_runtime': 0.7469, 'eval_samples_per_second': 36.149, 'eval_steps_per_second': 9.372, 'epoch': 1.81}
+{'loss': 0.4706, 'grad_norm': 0.4963500499725342, 'learning_rate': 5.504587155963303e-06, 'epoch': 1.98}
+{'eval_loss': 0.5601250529289246, 'eval_runtime': 0.7464, 'eval_samples_per_second': 36.174, 'eval_steps_per_second': 9.378, 'epoch': 1.98}
+{'train_runtime': 177.4794, 'train_samples_per_second': 5.443, 'train_steps_per_second': 0.687, 'train_loss': 0.8086635993152368, 'epoch': 2.0}
+`rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=8192
+Training finished and model saved.

@@ -77,7 +77,7 @@ pip install --index-url https://download.pytorch.org/whl/cu121 \
 # uv add vllm
 
 # ==== 7. ディレクトリ構成 ====
-mkdir -p logs checkpoints configs scripts data
+mkdir -p ../logs ../checkpoints ../configs ../data ../model
 
 # ==== 8. 動作確認 ====
 python - << 'PYCODE'
