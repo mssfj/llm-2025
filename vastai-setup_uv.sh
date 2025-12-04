@@ -2,7 +2,7 @@
 set -euxo pipefail
 
 # ==== 設定 ====
-PROJECT_ROOT="/root/llm-2025"  # 好きなら変えていい
+PROJECT_ROOT="/workspace/llm-2025"  # 好きなら変えていい
 
 # ==== 0. 基本パッケージ ====
 sudo apt-get update
@@ -46,7 +46,9 @@ dependencies = [
     "tiktoken",
     "scikit-learn",
     "numpy",
-    "einops"
+    "einops",
+    "unsloth",
+    "setuptools",
 ]
 
 [tool.uv]
