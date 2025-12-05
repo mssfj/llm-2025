@@ -12,8 +12,47 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import List
 
+import sys
+import types
 import torch
+
+# --- TorchAO が要求する低ビット dtypes をダミーで定義 ---
+# 実際に int1/int2/int4 量子化を使わない前提で、ImportError だけ殺す。
+for name in ("int1", "int2", "int3", "int4", "int5", "int6", "int7"):
+    if not hasattr(torch, name):
+        setattr(torch, name, torch.int8)
+# -------------------------------------------------------------
+
 from datasets import load_dataset, Dataset
+
+# ==== 2. torch._inductor.custom_graph_pass をダミーモジュールで埋める ====
+mod_name = "torch._inductor.custom_graph_pass"
+if mod_name not in sys.modules:
+    dummy = types.ModuleType(mod_name)
+
+    class CustomGraphPass:
+        def __init__(self, *args, **kwargs):
+            # 引数は全部無視
+            pass
+
+        def __call__(self, graph, *args, **kwargs):
+            # グラフ変換本来はここでやるが、今回は何もしないでそのまま返す
+            return graph
+
+    def get_hash_for_files(*args, **kwargs):
+        # 本来はファイル群からハッシュを作るが、ここでは適当な固定値でいい
+        return "0"
+
+    def register_custom_graph_pass(*args, **kwargs):
+        # 本来はカスタムパス登録だが、完全に無視する
+        return None
+
+    dummy.CustomGraphPass = CustomGraphPass
+    dummy.get_hash_for_files = get_hash_for_files
+    dummy.register_custom_graph_pass = register_custom_graph_pass
+    sys.modules[mod_name] = dummy
+# ============================================================
+
 from unsloth import FastLanguageModel, PatchFastRL
 from trl import GRPOConfig, GRPOTrainer
 
@@ -91,7 +130,7 @@ def correctness_reward_func(
 # ===== 3. モデル: Qwen3-8B-Instruct を Unsloth 4bit + LoRA でロード =====
 
 def load_model_and_tokenizer(
-    model_name: str = "Qwen/Qwen3-8B-Instruct",
+    model_name: str = "Qwen/Qwen3-8B",
     max_seq_length: int = 1024,
     lora_rank: int = 32,
 ):
@@ -144,7 +183,7 @@ def main():
     dataset = raw_dataset.select(range(100))   # 動いたらここを増やす
 
     model, tokenizer = load_model_and_tokenizer(
-        model_name="Qwen/Qwen3-8B-Instruct",
+        model_name="Qwen/Qwen3-8B",
         max_seq_length=max_seq_length,
         lora_rank=32,
     )
