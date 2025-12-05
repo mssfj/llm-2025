@@ -49,6 +49,9 @@ dependencies = [
     "einops",
     "unsloth",
     "setuptools",
+    "vllm",
+    "datasets",
+    "sympy",
 ]
 
 [tool.uv]
