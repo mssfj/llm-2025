@@ -71,8 +71,10 @@ def evaluate_gsm8k_with_vllm(
     llm = LLM(
         model=model_name,
         trust_remote_code=True,
-        tensor_parallel_size=1,  # 単GPU前提
-        # dtype はデフォルト(fp16)で十分。必要なら "bfloat16" に変える。
+        tensor_parallel_size=1,       # 単GPU
+        max_model_len=2048,           # ★ ここが重要：KVキャッシュを小さくする
+        gpu_memory_utilization=0.90,  # 必要なら 0.92〜0.95 まで上げてもよい
+        # dtype="bfloat16",           # 必要なら明示（Qwen はだいたい fp16/bf16対応） 
     )
 
     sampling_params = SamplingParams(
@@ -186,13 +188,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--batch-size",
         type=int,
-        default=8,
+        default=4,
         help="Batch size for vLLM generation (currently not used directly; vLLM handles batching internally).",
     )
     p.add_argument(
         "--output-path",
         type=str,
-        default="logs/gsm8k_qwen3_8b_eval.jsonl",
+        default="/workspace/logs/gsm8k_qwen3_8b_eval.jsonl",
         help="Path to save per-sample results as JSONL.",
     )
     return p.parse_args()
