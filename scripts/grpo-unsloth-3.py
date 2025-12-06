@@ -10,7 +10,7 @@ from vllm import SamplingParams
 MAX_SEQ_LENGTH = 2048
 LORA_RANK = 32
 SEED = 3407
-MODEL_NAME = "Qwen3/Qwen3-4B-Base" # ※元のコードはQwen3となっていましたが、一般的には2.5かInstruct系を使います。適宜修正してください。
+MODEL_NAME = "unsloth/Qwen3-4B-Base" # ※元のコードはQwen3となっていましたが、一般的には2.5かInstruct系を使います。適宜修正してください。
 
 # 思考プロセス用のタグ定義
 XML_TAGS = {
@@ -27,12 +27,12 @@ Then, provide your solution between {XML_TAGS['solution_start']}{XML_TAGS['solut
 
 # --- 2. Model & Tokenizer Setup ---
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name = "Qwen3/Qwen3-4B-Base", # 元コード準拠ならここを合わせる
+    model_name = "unsloth/Qwen3-4B-Base", # 元コード準拠ならここを合わせる
     max_seq_length = MAX_SEQ_LENGTH,
-    load_in_4bit = False,
+    load_in_4bit = True,
     fast_inference = True,
     max_lora_rank = LORA_RANK,
-    gpu_memory_utilization = 0.66,
+    gpu_memory_utilization = 0.4,
 )
 
 model = FastLanguageModel.get_peft_model(
@@ -44,10 +44,33 @@ model = FastLanguageModel.get_peft_model(
     random_state = SEED,
 )
 
-# Chat Templateの適用
-tokenizer.chat_template = tokenizer.chat_template \
-    .replace("'{system_prompt}'", f"'{SYSTEM_PROMPT}'") \
-    .replace("'{reasoning_start}'", f"'{XML_TAGS['reasoning_start']}'")
+# 修正箇所: ここを丸ごと置き換えてください
+# 1. まず文字列としてテンプレートを定義（改行バックスラッシュではなく、カッコで囲む方式に変更してミスを防ぎます）
+raw_chat_template = (
+    "{% if messages[0]['role'] == 'system' %}"
+    "{{ messages[0]['content'] + eos_token }}"
+    "{% set loop_messages = messages[1:] %}"
+    "{% else %}"
+    "{{ '{system_prompt}' + eos_token }}"
+    "{% set loop_messages = messages %}"
+    "{% endif %}"
+    "{% for message in loop_messages %}"
+        "{% if message['role'] == 'user' %}"
+            "{{ message['content'] }}"
+        "{% elif message['role'] == 'assistant' %}"
+            "{{ message['content'] + eos_token }}"
+        "{% endif %}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}{{ '{reasoning_start}' }}"
+    "{% endif %}"
+)
+
+# 2. 定義した文字列変数に対して replace を行い、それを tokenizer に代入する
+tokenizer.chat_template = raw_chat_template.replace("'{system_prompt}'", f"'{SYSTEM_PROMPT}'")
+tokenizer.chat_template = tokenizer.chat_template.replace("'{reasoning_start}'", f"'{XML_TAGS['reasoning_start']}'")
+
+# 確認用（エラーが出なければ表示されます）
+print("Chat template applied successfully.")
 
 # --- 3. Reward Functions ---
 # 正規表現のコンパイル（高速化のため外出し）
@@ -144,7 +167,7 @@ print(f"Dataset prepared. Max input length: {input_max_len}")
 
 # --- 5. Training ---
 training_args = GRPOConfig(
-    output_dir="outputs",
+    output_dir="../outputs",
     learning_rate=5e-6,
     weight_decay=0.001,
     warmup_ratio=0.1,
