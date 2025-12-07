@@ -1,197 +1,205 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-Single-GPU GRPO on GSM8K with Qwen3-8B-Instruct + Unsloth
-
-前提:
-  uv add unsloth trl "datasets>=2.19" accelerate transformers peft
-  GPU: A100 40GB or RTX 5090 32GB クラス
-"""
-
 import re
-from decimal import Decimal, InvalidOperation
-from typing import List
-
-import sys
-import types
 import torch
-from unsloth import FastLanguageModel, PatchFastRL
+import numpy as np
+from unsloth import FastLanguageModel
+from datasets import load_dataset, Dataset
 from trl import GRPOConfig, GRPOTrainer
+from vllm import SamplingParams
 
+# --- 1. Configuration ---
+MAX_SEQ_LENGTH = 2048
+LORA_RANK = 32
+SEED = 3407
+MODEL_NAME = "unsloth/Qwen3-4B-Base" # ※元のコードはQwen3となっていましたが、一般的には2.5かInstruct系を使います。適宜修正してください。
 
-# ===== 1. Dataset: GSM8K を [prompt, answer] 形式にする =====
+# 思考プロセス用のタグ定義
+XML_TAGS = {
+    "reasoning_start": "<start_working_out>",
+    "reasoning_end": "<end_working_out>",
+    "solution_start": "<SOLUTION>",
+    "solution_end": "</SOLUTION>"
+}
 
-SYSTEM_PROMPT = """You are a helpful math tutor.
-Solve the problem step by step and give the final answer as a number.
+SYSTEM_PROMPT = f"""You are given a problem.
+Think about the problem and provide your working out.
+Place it between {XML_TAGS['reasoning_start']} and {XML_TAGS['reasoning_end']}.
+Then, provide your solution between {XML_TAGS['solution_start']}{XML_TAGS['solution_end']}"""
 
-Format:
-Reasoning:
-  (your reasoning here)
-Final answer: <number>
-"""
+# --- 2. Model & Tokenizer Setup ---
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = "unsloth/Qwen3-4B-Base", # 元コード準拠ならここを合わせる
+    max_seq_length = MAX_SEQ_LENGTH,
+    load_in_4bit = True,
+    fast_inference = True,
+    max_lora_rank = LORA_RANK,
+    gpu_memory_utilization = 0.3,
+)
 
-def extract_hash_answer(text: str) -> str:
-    # GSM8K: ".... #### 12" の形式
-    if "####" not in text:
-        return text.strip()
-    return text.split("####")[-1].strip()
+model = FastLanguageModel.get_peft_model(
+    model,
+    r = LORA_RANK,
+    target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    lora_alpha = LORA_RANK * 2,
+    use_gradient_checkpointing = "unsloth",
+    random_state = SEED,
+)
 
-def get_gsm8k_questions(split: str = "train") -> Dataset:
-    data = load_dataset("openai/gsm8k", "main")[split]
-    data = data.map(
-        lambda x: {
-            "prompt": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": x["question"]},
-            ],
-            "answer": extract_hash_answer(x["answer"]),
-        }
-    )
-    return data
+# 修正箇所: ここを丸ごと置き換えてください
+# 1. まず文字列としてテンプレートを定義（改行バックスラッシュではなく、カッコで囲む方式に変更してミスを防ぎます）
+raw_chat_template = (
+    "{% if messages[0]['role'] == 'system' %}"
+    "{{ messages[0]['content'] + eos_token }}"
+    "{% set loop_messages = messages[1:] %}"
+    "{% else %}"
+    "{{ '{system_prompt}' + eos_token }}"
+    "{% set loop_messages = messages %}"
+    "{% endif %}"
+    "{% for message in loop_messages %}"
+        "{% if message['role'] == 'user' %}"
+            "{{ message['content'] }}"
+        "{% elif message['role'] == 'assistant' %}"
+            "{{ message['content'] + eos_token }}"
+        "{% endif %}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}{{ '{reasoning_start}' }}"
+    "{% endif %}"
+)
 
+# 2. 定義した文字列変数に対して replace を行い、それを tokenizer に代入する
+tokenizer.chat_template = raw_chat_template.replace("'{system_prompt}'", f"'{SYSTEM_PROMPT}'")
+tokenizer.chat_template = tokenizer.chat_template.replace("'{reasoning_start}'", f"'{XML_TAGS['reasoning_start']}'")
 
-# ===== 2. Reward 関数: 最後に出てきた数値 == 正解なら +2.0 =====
+# 確認用（エラーが出なければ表示されます）
+print("Chat template applied successfully.")
 
-num_pattern = re.compile(r"-?\d+(?:\.\d+)?")
+# --- 3. Reward Functions ---
+# 正規表現のコンパイル（高速化のため外出し）
+solution_pattern = re.compile(
+    rf"{XML_TAGS['reasoning_end']}.*?{XML_TAGS['solution_start']}(.+?)(?:{XML_TAGS['solution_end']}|{re.escape(tokenizer.eos_token)})?[\s]*$",
+    flags=re.MULTILINE | re.DOTALL
+)
+number_pattern = re.compile(
+    XML_TAGS['solution_start'] + r".*?[\s]{0,}([-]?[\d\.\,]{1,})",
+    flags=re.MULTILINE | re.DOTALL
+)
 
-def parse_number(s: str) -> Decimal | None:
-    m = num_pattern.search(s.replace(",", ""))
-    if not m:
-        return None
-    try:
-        return Decimal(m.group(0))
-    except InvalidOperation:
-        return None
+def match_format_exactly(completions, **kwargs):
+    """フォーマットが完全に一致しているか"""
+    return [3.0 if solution_pattern.search(c[0]["content"]) else 0.0 for c in completions]
 
-def correctness_reward_func(
-    prompts,
-    completions,
-    answer: List[str],
-    **kwargs,
-) -> List[float]:
-    """
-    TRL/Unsloth-GRPO 仕様に合わせた reward 関数。
-    completions: List[List[{"content": str, "role": "assistant"}]]
-    answer: gold 数値 (文字列, GSM8K から)
-    """
-    responses = [completion[0]["content"] for completion in completions]
-    rewards: List[float] = []
+def match_format_approximately(completions, **kwargs):
+    """タグが含まれているか（部分点）"""
+    scores = []
+    for c in completions:
+        text = c[0]["content"]
+        score = 0
+        score += 0.5 if text.count(XML_TAGS['reasoning_end']) == 1 else -1.0
+        score += 0.5 if text.count(XML_TAGS['solution_start']) == 1 else -1.0
+        score += 0.5 if text.count(XML_TAGS['solution_end']) == 1 else -1.0
+        scores.append(score)
+    return scores
 
-    for resp, gold_str in zip(responses, answer):
-        pred_num = parse_number(resp)
-        gold_num = parse_number(gold_str)
-
-        if pred_num is not None and gold_num is not None and pred_num == gold_num:
-            rewards.append(2.0)
+def check_answer(prompts, completions, answer, **kwargs):
+    """正解テキストとの一致判定"""
+    responses = [c[0]["content"] for c in completions]
+    extracted = [m.group(1) if (m := solution_pattern.search(r)) else None for r in responses]
+    
+    scores = []
+    for guess, truth in zip(extracted, answer):
+        if guess is None:
+            scores.append(-2.0)
+            continue
+        if guess == truth:
+            scores.append(5.0)
+        elif guess.strip() == truth.strip():
+            scores.append(3.5)
         else:
-            rewards.append(0.0)
+            # 数値的な近さを判定
+            try:
+                ratio = float(guess) / float(truth)
+                if 0.9 <= ratio <= 1.1: scores.append(2.0)
+                elif 0.8 <= ratio <= 1.2: scores.append(1.5)
+                else: scores.append(-2.5)
+            except:
+                scores.append(-4.5)
+    return scores
 
-    return rewards
+def check_numbers(prompts, completions, answer, **kwargs):
+    """数値としての正解判定"""
+    responses = [c[0]["content"] for c in completions]
+    extracted = [m.group(1) if (m := number_pattern.search(r)) else None for r in responses]
+    
+    scores = []
+    for guess, truth in zip(extracted, answer):
+        if guess is None:
+            scores.append(-2.5)
+            continue
+        try:
+            val_truth = float(truth.strip())
+            val_guess = float(guess.strip().replace(",", ""))
+            scores.append(3.5 if val_guess == val_truth else -1.5)
+        except:
+            scores.append(0)
+    return scores
 
-
-# ===== 3. モデル: Qwen3-8B-Instruct を Unsloth 4bit + LoRA でロード =====
-
-def load_model_and_tokenizer(
-    model_name: str = "Qwen/Qwen3-8B",
-    max_seq_length: int = 1024,
-    lora_rank: int = 32,
-):
-    """
-    Unsloth FastLanguageModel + GRPO パッチ
-    """
-    # GRPO 用に FastLanguageModel をパッチ
-    PatchFastRL("GRPO", FastLanguageModel)
-
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=model_name,
-        max_seq_length=max_seq_length,
-        load_in_4bit=True,            # QLoRA
-        fast_inference=False,         # まずは vLLM 無しでシンプルに
-        max_lora_rank=lora_rank,
-        gpu_memory_utilization=0.6,   # OOM したら 0.5 以下に落とす
-    )
-
-    model = FastLanguageModel.get_peft_model(
-        model,
-        r=lora_rank,
-        target_modules=[
-            "q_proj",
-            "k_proj",
-            "v_proj",
-            "o_proj",
-            "gate_proj",
-            "up_proj",
-            "down_proj",
+# --- 4. Data Preparation ---
+def prepare_dataset():
+    ds = load_dataset("open-r1/DAPO-Math-17k-Processed", "en", split="train")
+    
+    # プロンプト形式への変換
+    ds = ds.map(lambda x: {
+        "prompt": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user",   "content": x["prompt"]},
         ],
-        lora_alpha=lora_rank,
-        use_gradient_checkpointing="unsloth",
-        random_state=3407,
-    )
+        "answer": x["solution"], # 必要に応じてハッシュ処理などを戻す
+    })
+    
+    # 長すぎるデータをフィルタリング（90パーセンタイルでカット）
+    tokenized_lengths = [len(tokenizer.apply_chat_template(p, add_generation_prompt=True)) for p in ds["prompt"]]
+    max_len_cutoff = int(np.quantile(tokenized_lengths, 0.9))
+    ds = ds.select([i for i, l in enumerate(tokenized_lengths) if l <= max_len_cutoff])
+    
+    return ds, max_len_cutoff
 
-    return model, tokenizer
+dataset, input_max_len = prepare_dataset()
+print(f"Dataset prepared. Max input length: {input_max_len}")
 
+# --- 5. Training ---
+training_args = GRPOConfig(
+    output_dir="../outputs",
+    learning_rate=5e-6,
+    weight_decay=0.001,
+    warmup_ratio=0.1,
+    lr_scheduler_type="linear",
+    optim="adamw_8bit",
+    logging_steps=1,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=1, 
+    num_generations=4, # メモリ不足なら減らす
+    max_prompt_length=input_max_len + 1,
+    max_completion_length=MAX_SEQ_LENGTH - (input_max_len + 1),
+    max_steps=100, # テスト用に短く設定されています
+    save_steps=100,
+    report_to="none",
+    vllm_gpu_memory_utilization=0.4, # VLLM用のメモリ確保
+    vllm_sampling_params=SamplingParams(
+        min_p=0.1, top_p=1.0, top_k=-1, seed=SEED,
+        stop=[tokenizer.eos_token], include_stop_str_in_output=True
+    ),
+)
 
-# ===== 4. GRPO 設定 & Trainer =====
+trainer = GRPOTrainer(
+    model=model,
+    processing_class=tokenizer,
+    reward_funcs=[match_format_exactly, match_format_approximately, check_answer, check_numbers],
+    args=training_args,
+    train_dataset=dataset,
+)
 
-def main():
-    torch.cuda.set_device(0)
+print("Starting training...")
+trainer.train()
 
-    max_seq_length = 1024
-    max_prompt_length = 256
-    max_completion_length = max_seq_length - max_prompt_length
-
-    # データ (まずは train の先頭 100 件くらいで動作確認するのが現実的)
-    raw_dataset = get_gsm8k_questions(split="train")
-    dataset = raw_dataset.select(range(100))   # 動いたらここを増やす
-
-    model, tokenizer = load_model_and_tokenizer(
-        model_name="Qwen/Qwen3-8B",
-        max_seq_length=max_seq_length,
-        lora_rank=32,
-    )
-
-    training_args = GRPOConfig(
-        # 典型的な設定 (Unsloth / HF LLM Course をベース)
-        learning_rate=5e-6,
-        adam_beta1=0.9,
-        adam_beta2=0.99,
-        weight_decay=0.1,
-        warmup_ratio=0.1,
-        lr_scheduler_type="cosine",
-        optim="paged_adamw_8bit",
-
-        logging_steps=1,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-
-        num_generations=4,  # 1問につき 4 サンプル (OOM したら 2 に下げる)
-        max_prompt_length=max_prompt_length,
-        max_completion_length=max_completion_length,
-
-        max_steps=200,      # まずは 200 step 程度で挙動確認
-        save_steps=200,
-        max_grad_norm=0.1,
-        report_to="none",   # wandb は切る。Unsloth のログで十分
-        output_dir="qwen3-8b-gsm8k-grpo",
-
-        # 最初は vLLM は使わない。安定してから use_vllm=True を検討。
-        use_vllm=False,
-    )
-
-    trainer = GRPOTrainer(
-        model=model,
-        processing_class=tokenizer,
-        reward_funcs=[correctness_reward_func],
-        args=training_args,
-        train_dataset=dataset,
-    )
-
-    trainer.train()
-
-    # LoRA だけ保存
-    model.save_lora("qwen3-8b-gsm8k-grpo-lora")
-
-
-if __name__ == "__main__":
-    main()
-
+# --- 6. Save ---
+model.save_lora("grpo_saved_lora")
+print("Model saved.")
