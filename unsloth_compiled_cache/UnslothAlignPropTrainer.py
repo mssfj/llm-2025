@@ -1,8 +1,8 @@
 """
 2025.11.2
 2025.11.1
-4.57.2
-0.23.0
+4.56.2
+0.22.2
 __UNSLOTH_VERSIONING__
 """
 
@@ -277,7 +277,7 @@ class UnslothAlignPropConfig(AlignPropConfig):
     
     def __init__(
         self,
-        exp_name = 'sft-unsloth',
+        exp_name = 'grpo-unsloth-3',
         run_name = '',
         seed = 3407,
         log_with = None,
@@ -626,7 +626,6 @@ class _UnslothAlignPropTrainer(PyTorchModelHubMixin):
         Args:
             batch_size (int): Batch size to use for sampling
             with_grad (bool): Whether the generated RGBs should have gradients attached to it.
-            prompts (list[str], *optional*): If provided, use these prompts instead of generating new ones.
 
         Returns:
             prompt_image_pairs (dict[Any])
@@ -775,7 +774,7 @@ class UnslothAlignPropTrainer(_UnslothAlignPropTrainer):
     heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/ As of now only Stable Diffusion based
     pipelines are supported
 
-    Args:
+    Attributes:
         config (`AlignPropConfig`):
             Configuration object for AlignPropTrainer. Check the documentation of `PPOConfig` for more details.
         reward_function (`Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]`):

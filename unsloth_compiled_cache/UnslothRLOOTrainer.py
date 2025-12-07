@@ -1,8 +1,8 @@
 """
 2025.11.2
 2025.11.1
-4.57.2
-0.23.0
+4.56.2
+0.22.2
 __UNSLOTH_VERSIONING__
 """
 
@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from typing import Any, List, Optional, Tuple, Union, Dict, Set, Callable
-from trl.trainer.rloo_trainer import (Any, AutoConfig, AutoModelForSequenceClassification, AutoProcessor, AutoTokenizer, DataLoader, Dataset, FSDP, GenerationConfig, IterableDataset, Optional, Path, PeftConfig, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, RLOOConfig, RLOOTrainer, RepeatSampler, RewardFunc, Sampler, SyncRefModelCallback, Trainer, TrainerCallback, Union, VLLMClient, apply_chat_template, broadcast_object_list, copy, datasets, defaultdict, deque, disable_dropout_in_model, entropy_from_logits, gather, gather_object, generate_model_card, get_comet_experiment_url, identity, inspect, is_conversational, is_datasets_available, is_flash_attn_2_available, is_peft_model, is_rich_available, is_vllm_available, is_wandb_available, logger, logging, maybe_apply_chat_template, nanmax, nanmin, nanstd, nn, nullcontext, os, pad, partial, prepare_deepspeed, prepare_fsdp, prepare_peft_model, print_prompt_completions_sample, profiling_context, profiling_decorator, re, seed_worker, selective_log_softmax, set_seed, shuffle_sequence_dict, split_pixel_values_by_grid, split_tensor_dict, textwrap, torch, transformers, truncate_with_protected_tokens, unsplit_pixel_values_by_grid, unwrap_model_for_generation, wandb, warnings, Any, FSDP, Union, apply_chat_template, broadcast_object_list, copy, gather, gather_object, is_conversational, is_flash_attn_2_available, logging, maybe_apply_chat_template, nanstd, nullcontext, os, pad, profiling_context, re, torch, transformers, truncate_with_protected_tokens, unwrap_model_for_generation, FSDP, gather, is_peft_model, nn, nullcontext, os, profiling_decorator, re, Any, Union, profiling_decorator, re, shuffle_sequence_dict, split_pixel_values_by_grid, split_tensor_dict, torch, unsplit_pixel_values_by_grid, Optional, PreTrainedModel, Trainer, logger, os, re, torch, FSDP, nn, os, re, FSDP, nn, re, torch)
+from trl.trainer.rloo_trainer import (Any, AutoConfig, AutoModelForSequenceClassification, AutoProcessor, AutoTokenizer, DataLoader, Dataset, FSDP, GenerationConfig, GuidedDecodingParams, IterableDataset, LLM, Optional, Path, PeftConfig, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, RLOOConfig, RLOOTrainer, RepeatSampler, RewardFunc, Sampler, SamplingParams, SyncRefModelCallback, Trainer, TrainerCallback, Union, VLLMClient, apply_chat_template, broadcast_object_list, copy, datasets, defaultdict, deque, disable_dropout_in_model, entropy_from_logits, gather, gather_object, generate_model_card, get_comet_experiment_url, identity, inspect, is_conversational, is_datasets_available, is_flash_attn_2_available, is_peft_model, is_rich_available, is_vllm_available, is_wandb_available, logger, logging, maybe_apply_chat_template, nanmax, nanmin, nanstd, nn, nullcontext, os, pad, partial, prepare_deepspeed, prepare_fsdp, prepare_peft_model, print_prompt_completions_sample, profiling_context, profiling_decorator, re, seed_worker, selective_log_softmax, set_seed, shuffle_sequence_dict, split_pixel_values_by_grid, split_tensor_dict, textwrap, torch, transformers, truncate_with_protected_tokens, unsplit_pixel_values_by_grid, unwrap_model_for_generation, wandb, warnings, Any, FSDP, GuidedDecodingParams, LLM, SamplingParams, Union, apply_chat_template, broadcast_object_list, copy, gather, gather_object, is_conversational, is_flash_attn_2_available, logging, maybe_apply_chat_template, nanstd, nullcontext, os, pad, profiling_context, re, torch, transformers, truncate_with_protected_tokens, unwrap_model_for_generation, FSDP, LLM, gather, is_peft_model, nn, nullcontext, os, profiling_decorator, re, Any, Union, profiling_decorator, re, shuffle_sequence_dict, split_pixel_values_by_grid, split_tensor_dict, torch, unsplit_pixel_values_by_grid, Optional, PreTrainedModel, Trainer, logger, os, re, torch, FSDP, LLM, nn, os, re, FSDP, nn, re, torch)
 
 
 import os
@@ -284,10 +284,6 @@ class UnslothRLOOConfig(RLOOConfig):
               server is running (start with `trl vllm-serve`).
             - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
               separate server but may cause resource contention with training.
-        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
-            Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
-            the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
-            implementation.
         vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
             Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
 
@@ -314,6 +310,10 @@ class UnslothRLOOConfig(RLOOConfig):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
+        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
+            Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
+            the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
+            implementation.
 
         > Parameters that control the training
 
@@ -423,6 +423,7 @@ class UnslothRLOOConfig(RLOOConfig):
         seed = 3407,
         data_seed = 3407,
         jit_mode_eval = False,
+        use_ipex = False,
         bf16 = False,
         fp16 = False,
         fp16_opt_level = 'O1',
@@ -448,7 +449,7 @@ class UnslothRLOOConfig(RLOOConfig):
         metric_for_best_model = None,
         greater_is_better = None,
         ignore_data_skip = False,
-        fsdp = None,
+        fsdp = '',
         fsdp_min_num_params = 0,
         fsdp_config = None,
         fsdp_transformer_layer_cls_to_wrap = None,
@@ -462,8 +463,6 @@ class UnslothRLOOConfig(RLOOConfig):
         group_by_length = False,
         length_column_name = 'length',
         report_to = None,
-        project = 'huggingface',
-        trackio_space_id = 'trackio',
         ddp_find_unused_parameters = None,
         ddp_bucket_cap_mb = None,
         ddp_broadcast_buffers = None,
@@ -524,10 +523,10 @@ class UnslothRLOOConfig(RLOOConfig):
         use_transformers_paged = False,
         cache_implementation = None,
         use_vllm = False,
+        vllm_server_base_url = None,
         vllm_mode = 'colocate',
         vllm_model_impl = 'vllm',
         vllm_guided_decoding_regex = None,
-        vllm_server_base_url = None,
         vllm_server_host = '0.0.0.0',
         vllm_server_port = 8000,
         vllm_server_timeout = 240.0,
@@ -634,6 +633,7 @@ class UnslothRLOOConfig(RLOOConfig):
             seed = seed,
             data_seed = data_seed,
             jit_mode_eval = jit_mode_eval,
+            use_ipex = use_ipex,
             bf16 = bf16,
             fp16 = fp16,
             fp16_opt_level = fp16_opt_level,
@@ -673,8 +673,6 @@ class UnslothRLOOConfig(RLOOConfig):
             group_by_length = group_by_length,
             length_column_name = length_column_name,
             report_to = report_to,
-            project = project,
-            trackio_space_id = trackio_space_id,
             ddp_find_unused_parameters = ddp_find_unused_parameters,
             ddp_bucket_cap_mb = ddp_bucket_cap_mb,
             ddp_broadcast_buffers = ddp_broadcast_buffers,
@@ -735,10 +733,10 @@ class UnslothRLOOConfig(RLOOConfig):
             use_transformers_paged = use_transformers_paged,
             cache_implementation = cache_implementation,
             use_vllm = use_vllm,
+            vllm_server_base_url = vllm_server_base_url,
             vllm_mode = vllm_mode,
             vllm_model_impl = vllm_model_impl,
             vllm_guided_decoding_regex = vllm_guided_decoding_regex,
-            vllm_server_base_url = vllm_server_base_url,
             vllm_server_host = vllm_server_host,
             vllm_server_port = vllm_server_port,
             vllm_server_timeout = vllm_server_timeout,
@@ -884,16 +882,16 @@ class _UnslothRLOOTrainer(Trainer):
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
             model_id = model
-            dtype = model_init_kwargs.get("dtype")
-            if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
-                pass  # dtype is already a torch.dtype or "auto" or None
-            elif isinstance(dtype, str):  # it's a str, but not "auto"
-                dtype = getattr(torch, dtype)
-                model_init_kwargs["dtype"] = dtype
+            torch_dtype = model_init_kwargs.get("torch_dtype")
+            if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
+                pass  # torch_dtype is already a torch.dtype or "auto" or None
+            elif isinstance(torch_dtype, str):  # it's a str, but not "auto"
+                torch_dtype = getattr(torch, torch_dtype)
+                model_init_kwargs["torch_dtype"] = torch_dtype
             else:
                 raise ValueError(
-                    "Invalid `dtype` passed to `RLOOConfig`. Expected either 'auto' or a string representing "
-                    f"a `torch.dtype` (e.g., 'float32'), but got {dtype}."
+                    "Invalid `torch_dtype` passed to `RLOOConfig`. Expected either 'auto' or a string representing "
+                    f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
                 )
             # Disable caching if gradient checkpointing is enabled [not supported]
             config = AutoConfig.from_pretrained(model_id)
@@ -2154,7 +2152,8 @@ class UnslothRLOOTrainer(_UnslothRLOOTrainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset,
+        IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
@@ -2177,7 +2176,8 @@ class UnslothRLOOTrainer(_UnslothRLOOTrainer):
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
+        None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):

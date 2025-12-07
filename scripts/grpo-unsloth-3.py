@@ -32,7 +32,7 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     load_in_4bit = True,
     fast_inference = True,
     max_lora_rank = LORA_RANK,
-    gpu_memory_utilization = 0.4,
+    gpu_memory_utilization = 0.3,
 )
 
 model = FastLanguageModel.get_peft_model(

@@ -1,8 +1,8 @@
 """
 2025.11.2
 2025.11.1
-4.57.2
-0.23.0
+4.56.2
+0.22.2
 __UNSLOTH_VERSIONING__
 """
 
@@ -317,6 +317,7 @@ class UnslothKTOConfig(KTOConfig):
         seed = 3407,
         data_seed = 3407,
         jit_mode_eval = False,
+        use_ipex = False,
         bf16 = False,
         fp16 = False,
         fp16_opt_level = 'O1',
@@ -342,7 +343,7 @@ class UnslothKTOConfig(KTOConfig):
         metric_for_best_model = None,
         greater_is_better = None,
         ignore_data_skip = False,
-        fsdp = None,
+        fsdp = '',
         fsdp_min_num_params = 0,
         fsdp_config = None,
         fsdp_transformer_layer_cls_to_wrap = None,
@@ -356,8 +357,6 @@ class UnslothKTOConfig(KTOConfig):
         group_by_length = False,
         length_column_name = 'length',
         report_to = None,
-        project = 'huggingface',
-        trackio_space_id = 'trackio',
         ddp_find_unused_parameters = None,
         ddp_bucket_cap_mb = None,
         ddp_broadcast_buffers = None,
@@ -481,6 +480,7 @@ class UnslothKTOConfig(KTOConfig):
             seed = seed,
             data_seed = data_seed,
             jit_mode_eval = jit_mode_eval,
+            use_ipex = use_ipex,
             bf16 = bf16,
             fp16 = fp16,
             fp16_opt_level = fp16_opt_level,
@@ -520,8 +520,6 @@ class UnslothKTOConfig(KTOConfig):
             group_by_length = group_by_length,
             length_column_name = length_column_name,
             report_to = report_to,
-            project = project,
-            trackio_space_id = trackio_space_id,
             ddp_find_unused_parameters = ddp_find_unused_parameters,
             ddp_bucket_cap_mb = ddp_bucket_cap_mb,
             ddp_broadcast_buffers = ddp_broadcast_buffers,
@@ -628,16 +626,16 @@ class _UnslothKTOTrainer(Trainer):
             raise ValueError("You passed model_kwargs to the KTOTrainer. But your model is already instantiated.")
         else:
             model_init_kwargs = args.model_init_kwargs
-            dtype = model_init_kwargs.get("dtype")
-            if dtype is not None:
+            torch_dtype = model_init_kwargs.get("torch_dtype")
+            if torch_dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
-                if isinstance(dtype, str) and dtype != "auto":
-                    dtype = getattr(torch, dtype)
-                if dtype != "auto" and not isinstance(dtype, torch.dtype):
+                if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                    torch_dtype = getattr(torch, torch_dtype)
+                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
                     raise ValueError(
-                        f"Invalid `dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
+                        f"Invalid `torch_dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
                     )
-                model_init_kwargs["dtype"] = dtype
+                model_init_kwargs["torch_dtype"] = torch_dtype
 
         if args.ref_model_init_kwargs is None:
             ref_model_init_kwargs = {}
@@ -647,16 +645,16 @@ class _UnslothKTOTrainer(Trainer):
             )
         else:
             ref_model_init_kwargs = args.ref_model_init_kwargs
-            dtype = ref_model_init_kwargs.get("dtype")
-            if dtype is not None:
+            torch_dtype = ref_model_init_kwargs.get("torch_dtype")
+            if torch_dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
-                if isinstance(dtype, str) and dtype != "auto":
-                    dtype = getattr(torch, dtype)
-                if dtype != "auto" and not isinstance(dtype, torch.dtype):
+                if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                    torch_dtype = getattr(torch, torch_dtype)
+                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
                     raise ValueError(
-                        f"Invalid `dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
+                        f"Invalid `torch_dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
                     )
-                ref_model_init_kwargs["dtype"] = dtype
+                ref_model_init_kwargs["torch_dtype"] = torch_dtype
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
@@ -1283,12 +1281,6 @@ class _UnslothKTOTrainer(Trainer):
             average_log_prob:
                 If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the
                 log probabilities of the (non-masked) tokens.
-            label_pad_token_id:
-                The label value to ignore when computing log probabilities.
-            is_encoder_decoder:
-                Whether the model is an encoder-decoder model. If True, the labels are not shifted and the logits are
-                assumed to already be aligned with the labels. If False, the labels are shifted to the right by one
-                position, and the logits are assumed to be aligned with the shifted labels.
 
         Returns:
             A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the

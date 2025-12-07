@@ -2,7 +2,7 @@
 set -euxo pipefail
 
 # ==== 設定 ====
-PROJECT_ROOT="/workspace/llm-2025"  # 好きなら変えていい
+PROJECT_ROOT="/workspace/llm-2025"
 
 # ==== 0. 基本パッケージ ====
 sudo apt-get update
@@ -12,7 +12,6 @@ sudo apt-get install -y \
   pkg-config
 
 # ==== 1. uv インストール ====
-# ~/.local/bin に入るので PATH を通す
 curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 
@@ -20,12 +19,11 @@ export PATH="$HOME/.local/bin:$PATH"
 mkdir -p "${PROJECT_ROOT}"
 cd "${PROJECT_ROOT}"
 
-# 既にpyprojectがあれば壊さないように一応確認
 if [ ! -f pyproject.toml ]; then
   uv init --python 3.10 .
 fi
 
-# ==== 3. pyproject.toml を上書き（コンペ用構成） ====
+# ==== 3. pyproject.toml を上書き（コンペ用構成・グループ分け） ====
 cat > pyproject.toml << 'EOF'
 [project]
 name = "llmcomp"
@@ -33,11 +31,11 @@ version = "0.1.0"
 description = "Matsuo Lab LLM Competition Pipeline"
 requires-python = ">=3.10"
 
+# 共通依存（SFT / GRPO / Eval で共通）
 dependencies = [
     "transformers",
     "accelerate",
     "datasets",
-    "trl",
     "peft",
     "bitsandbytes",
     "sentencepiece",
@@ -47,43 +45,49 @@ dependencies = [
     "scikit-learn",
     "numpy",
     "einops",
-    "unsloth",
     "setuptools",
-    "vllm",
-    "datasets",
     "sympy",
+    "unsloth",
 ]
 
-[tool.uv]
-dev-dependencies = [
+# グループ依存（uv の新仕様）
+[dependency-groups]
+# SFT: 今後 SFT専用をここに追加
+sft = [
+]
+
+# GRPO / RL / 推論
+grpo = [
+    "transformers==4.56.2",
+    "trl==0.22.2",
+    "vllm==0.10.2",
+]
+
+# 評価系（math-verify 等）
+eval = [
+]
+
+# 開発用
+dev = [
     "pytest",
     "ipykernel",
 ]
 EOF
 
 # ==== 4. 依存インストール（Torch 以外） ====
-# .venv を作ってそこに全部入る
-uv sync
+uv sync --group sft --group grpo --group dev
 
-# ==== 5. PyTorch (CUDA 対応 wheel) ====
-# ドライバが CUDA 12.4 でも、cu121 wheel は普通に動く
-source .venv/bin/activate
-
-# 必要に応じてバージョンは変えていいが、cu121 wheel を使うこと
-pip install --index-url https://download.pytorch.org/whl/cu121 \
+# ==== 5. PyTorch (CUDA 12.1 wheel) ====
+uv pip install --index-url https://download.pytorch.org/whl/cu121 \
     "torch==2.4.0" \
     "torchvision==0.19.0" \
     "torchaudio==2.4.0"
 
-# ==== 6. vLLM 等が必要ならここで追加 ====
-# いったんコメントアウト。使うと決めた時に外せ。
-# uv add vllm
-
-# ==== 7. ディレクトリ構成 ====
+# ==== 6. ディレクトリ構成 ====
 mkdir -p ../logs ../checkpoints ../configs ../data ../model
 
-# ==== 8. 動作確認 ====
-python - << 'PYCODE'
+# ==== 7. 動作確認 ====
+uv run python - << 'PYCODE'
 import torch
 print("torch version:", torch.__version__)
 print("cuda available:", torch.cuda.is_available())
@@ -93,5 +97,5 @@ PYCODE
 echo "=== setup done. ==="
 echo "次回以降は:"
 echo "  cd ${PROJECT_ROOT}"
-echo "  source .venv/bin/activate"
+echo "  uv run python your_script.py"
 

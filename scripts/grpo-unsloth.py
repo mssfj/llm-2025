@@ -15,44 +15,6 @@ from typing import List
 import sys
 import types
 import torch
-
-# --- TorchAO が要求する低ビット dtypes をダミーで定義 ---
-# 実際に int1/int2/int4 量子化を使わない前提で、ImportError だけ殺す。
-for name in ("int1", "int2", "int3", "int4", "int5", "int6", "int7"):
-    if not hasattr(torch, name):
-        setattr(torch, name, torch.int8)
-# -------------------------------------------------------------
-
-from datasets import load_dataset, Dataset
-
-# ==== 2. torch._inductor.custom_graph_pass をダミーモジュールで埋める ====
-mod_name = "torch._inductor.custom_graph_pass"
-if mod_name not in sys.modules:
-    dummy = types.ModuleType(mod_name)
-
-    class CustomGraphPass:
-        def __init__(self, *args, **kwargs):
-            # 引数は全部無視
-            pass
-
-        def __call__(self, graph, *args, **kwargs):
-            # グラフ変換本来はここでやるが、今回は何もしないでそのまま返す
-            return graph
-
-    def get_hash_for_files(*args, **kwargs):
-        # 本来はファイル群からハッシュを作るが、ここでは適当な固定値でいい
-        return "0"
-
-    def register_custom_graph_pass(*args, **kwargs):
-        # 本来はカスタムパス登録だが、完全に無視する
-        return None
-
-    dummy.CustomGraphPass = CustomGraphPass
-    dummy.get_hash_for_files = get_hash_for_files
-    dummy.register_custom_graph_pass = register_custom_graph_pass
-    sys.modules[mod_name] = dummy
-# ============================================================
-
 from unsloth import FastLanguageModel, PatchFastRL
 from trl import GRPOConfig, GRPOTrainer
 

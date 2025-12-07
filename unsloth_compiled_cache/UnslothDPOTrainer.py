@@ -1,8 +1,8 @@
 """
 2025.11.2
 2025.11.1
-4.57.2
-0.23.0
+4.56.2
+0.22.2
 __UNSLOTH_VERSIONING__
 """
 
@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from typing import Any, List, Optional, Tuple, Union, Dict, Set, Callable
-from trl.trainer.dpo_trainer import (Any, AutoModelForCausalLM, AutoTokenizer, BaseImageProcessor, Callable, DPOConfig, DPOTrainer, DataCollator, DataCollatorForPreference, DataLoader, Dataset, EvalLoopOutput, F, FDivergenceConstants, FDivergenceType, FeatureExtractionMixin, IterableDataset, Literal, MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES, Optional, PartialState, Path, PeftConfig, PeftModel, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, RunningMoments, SyncRefModelCallback, Trainer, TrainerCallback, Union, autocast, cap_exp, contextmanager, create_reference_model, dataclass, defaultdict, disable_dropout_in_model, empty_cache, flush_left, flush_right, generate_model_card, get_comet_experiment_url, get_peft_model, inspect, is_comet_available, is_liger_kernel_available, is_mlflow_available, is_peft_available, is_wandb_available, log_table_to_comet_experiment, logger, logging, maybe_apply_chat_template, maybe_extract_prompt, nn, nullcontext, os, pad, pad_to_length, pd, peft_module_casting_to_bf16, prepare_deepspeed, prepare_fsdp, prepare_model_for_kbit_training, random, selective_log_softmax, shift_tokens_right, textwrap, torch, tqdm, wandb, F, Optional, PeftModel, PreTrainedModel, Trainer, is_peft_available, logger, os, torch)
+from trl.trainer.dpo_trainer import (Any, AutoModelForCausalLM, AutoTokenizer, BaseImageProcessor, Callable, DPOConfig, DPOTrainer, DataCollator, DataCollatorForPreference, DataLoader, Dataset, EvalLoopOutput, F, FDivergenceConstants, FDivergenceType, FeatureExtractionMixin, IterableDataset, Literal, MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES, Optional, PartialState, Path, PeftConfig, PeftModel, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, RunningMoments, SyncRefModelCallback, Trainer, TrainerCallback, Union, autocast, cap_exp, contextmanager, create_reference_model, dataclass, defaultdict, disable_dropout_in_model, empty_cache, flush_left, flush_right, generate_model_card, get_comet_experiment_url, get_peft_model, inspect, is_comet_available, is_liger_kernel_available, is_mlflow_available, is_peft_available, is_wandb_available, log_table_to_comet_experiment, logger, logging, maybe_apply_chat_template, maybe_extract_prompt, nn, nullcontext, os, pad, pad_to_length, pd, peft_module_casting_to_bf16, prepare_deepspeed, prepare_fsdp, prepare_model_for_kbit_training, random, selective_log_softmax, shift_tokens_right, textwrap, torch, tqdm, wandb, F, Optional, PeftModel, PreTrainedModel, Trainer, is_peft_available, logger, os, torch)
 
 
 import os
@@ -406,6 +406,7 @@ class UnslothDPOConfig(DPOConfig):
         seed = 3407,
         data_seed = 3407,
         jit_mode_eval = False,
+        use_ipex = False,
         bf16 = False,
         fp16 = False,
         fp16_opt_level = 'O1',
@@ -431,7 +432,7 @@ class UnslothDPOConfig(DPOConfig):
         metric_for_best_model = None,
         greater_is_better = None,
         ignore_data_skip = False,
-        fsdp = None,
+        fsdp = '',
         fsdp_min_num_params = 0,
         fsdp_config = None,
         fsdp_transformer_layer_cls_to_wrap = None,
@@ -445,8 +446,6 @@ class UnslothDPOConfig(DPOConfig):
         group_by_length = False,
         length_column_name = 'length',
         report_to = None,
-        project = 'huggingface',
-        trackio_space_id = 'trackio',
         ddp_find_unused_parameters = None,
         ddp_bucket_cap_mb = None,
         ddp_broadcast_buffers = None,
@@ -584,6 +583,7 @@ class UnslothDPOConfig(DPOConfig):
             seed = seed,
             data_seed = data_seed,
             jit_mode_eval = jit_mode_eval,
+            use_ipex = use_ipex,
             bf16 = bf16,
             fp16 = fp16,
             fp16_opt_level = fp16_opt_level,
@@ -623,8 +623,6 @@ class UnslothDPOConfig(DPOConfig):
             group_by_length = group_by_length,
             length_column_name = length_column_name,
             report_to = report_to,
-            project = project,
-            trackio_space_id = trackio_space_id,
             ddp_find_unused_parameters = ddp_find_unused_parameters,
             ddp_bucket_cap_mb = ddp_bucket_cap_mb,
             ddp_broadcast_buffers = ddp_broadcast_buffers,
@@ -786,7 +784,7 @@ class _UnslothDPOTrainer(Trainer):
             )
 
         self.is_encoder_decoder = model.config.is_encoder_decoder
-        self.is_vision_model = model.config.model_type in MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.keys()
+        self.is_vision_model = model.config.model_type in MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES.keys()
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         self.model_adapter_name = args.model_adapter_name
         self.ref_adapter_name = args.ref_adapter_name
@@ -984,16 +982,16 @@ class _UnslothDPOTrainer(Trainer):
             model_init_kwargs = args.ref_model_init_kwargs or {}
 
         # Handle torch dtype
-        dtype = model_init_kwargs.get("dtype")
-        if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
-            pass  # dtype is already a torch.dtype or "auto" or None
-        elif isinstance(dtype, str):  # it's a str, but not "auto"
-            dtype = getattr(torch, dtype)
-            model_init_kwargs["dtype"] = dtype
+        torch_dtype = model_init_kwargs.get("torch_dtype")
+        if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
+            pass  # torch_dtype is already a torch.dtype or "auto" or None
+        elif isinstance(torch_dtype, str):  # it's a str, but not "auto"
+            torch_dtype = getattr(torch, torch_dtype)
+            model_init_kwargs["torch_dtype"] = torch_dtype
         else:
             raise ValueError(
-                "Invalid `dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing "
-                f"a `torch.dtype` (e.g., 'float32'), but got {dtype}."
+                "Invalid `torch_dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing "
+                f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
             )
 
         # Create model
@@ -1471,29 +1469,6 @@ class _UnslothDPOTrainer(Trainer):
                 Log probabilities of the reference model for the chosen responses. Shape: `(batch_size,)`.
             ref_rejected_logps (`torch.FloatTensor`):
                 Log probabilities of the reference model for the rejected responses. Shape: `(batch_size,)`.
-            loss_type (`str`, defaults to `"sigmoid"`):
-                The type of loss to compute. One of:
-                - `"sigmoid"`: Sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
-                - `"hinge"`: Hinge loss on the normalized likelihood from the
-                  [SLiC](https://huggingface.co/papers/2305.10425) paper.
-                - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
-                - `"exo_pair"`: Pairwise EXO loss from the [EXO](https://huggingface.co/papers/2402.00856) paper.
-                - `"nca_pair"`: Pairwise NCA loss from the [NCA](https://huggingface.co/papers/2402.05369) paper.
-                - `"robust"`: Unbiased estimate of the DPO loss that is robust to preference noise from the [Robust
-                  DPO](https://huggingface.co/papers/2403.00409) paper.
-                - `"bco_pair"`: Pairwise BCO loss from the [BCO](https://huggingface.co/papers/2404.04656) paper.
-                - `"sppo_hard"`: SPPO loss with hard label from the [SPPO](https://huggingface.co/papers/2405.00675)
-                  paper.
-                - `"aot"`: AOT loss for paired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
-                - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882)
-                  paper.
-                - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the
-                  [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
-                - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
-                - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
-                - `"sft"`: Negative log-likelihood loss (standard supervised fine-tuning loss).
-            model_output (`dict[str, torch.FloatTensor]`, *optional*):
-                The output of the model's forward pass. This is used to compute auxiliary losses if enabled.
 
         Returns:
             A tuple of three tensors: `(losses, chosen_rewards, rejected_rewards)`. The losses tensor contains the DPO
@@ -2511,7 +2486,8 @@ class UnslothDPOTrainer(_UnslothDPOTrainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset,
+        IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
@@ -2528,13 +2504,16 @@ class UnslothDPOTrainer(_UnslothDPOTrainer):
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
+        None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
-        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to `None`):
+        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to
+        `None`):
             A tuple containing the optimizer class and keyword arguments to use. Overrides `optim` and `optim_args` in
             `args`. Incompatible with the `optimizers` argument.
-        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to `None`):
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to
+        `None`):
             A function that preprocess the logits right before caching them at each evaluation step. Must take two
             tensors, the logits and the labels, and return the logits once processed as desired. The modifications made
             by this function will be reflected in the predictions received by `compute_metrics`.

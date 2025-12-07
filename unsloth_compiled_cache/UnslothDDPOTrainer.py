@@ -1,8 +1,8 @@
 """
 2025.11.2
 2025.11.1
-4.57.2
-0.23.0
+4.56.2
+0.22.2
 __UNSLOTH_VERSIONING__
 """
 
@@ -293,7 +293,7 @@ class UnslothDDPOConfig(DDPOConfig):
     
     def __init__(
         self,
-        exp_name = 'sft-unsloth',
+        exp_name = 'grpo-unsloth-3',
         run_name = '',
         seed = 3407,
         log_with = None,
@@ -1014,14 +1014,13 @@ class UnslothDDPOTrainer(_UnslothDDPOTrainer):
     inspired by the work here: https://github.com/kvablack/ddpo-pytorch As of now only Stable Diffusion based pipelines
     are supported
 
-    Args:
-        config ([`DDPOConfig`]):
-            Configuration object for DDPOTrainer. Check the documentation of [`PPOConfig`] for more details.
-        reward_function (`Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]`):
-            Reward function to be used.
-        prompt_function (`Callable[[], tuple[str, Any]]`): Function to generate prompts to guide model
-        sd_pipeline ([`DDPOStableDiffusionPipeline`]): Stable Diffusion pipeline to be used for training.
-        image_samples_hook (`Optional[Callable[[Any, Any, Any], Any]]`): Hook to be called to log images.
+    Attributes:
+        **config** (`DDPOConfig`) -- Configuration object for DDPOTrainer. Check the documentation of `PPOConfig` for more:
+         details.
+        **reward_function** (Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]) -- Reward function to be used:
+        **prompt_function** (Callable[[], tuple[str, Any]]) -- Function to generate prompts to guide model
+        **sd_pipeline** (`DDPOStableDiffusionPipeline`) -- Stable Diffusion pipeline to be used for training.
+        **image_samples_hook** (Optional[Callable[[Any, Any, Any], Any]]) -- Hook to be called to log images
     
     """
     def __init__(
