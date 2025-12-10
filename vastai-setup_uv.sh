@@ -9,7 +9,17 @@ sudo apt-get update
 sudo apt-get install -y \
   git wget curl build-essential \
   python3-dev python3-pip \
-  pkg-config
+  pkg-config nodejs npm unzip
+
+# ==== codexのインストール ====
+npm i -g @openai/codex
+
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+aws configure
+
+aws s3 cp s3://llm-train-dev/codex/auth.json ~/.codex/auth.json
 
 # ==== 1. uv インストール ====
 curl -LsSf https://astral.sh/uv/install.sh | sh

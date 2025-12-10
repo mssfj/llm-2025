@@ -3,6 +3,9 @@
 unsloth_compiled_cache
 uv.lock
 wandb
+aws
+'=4.56'
+awscliv2.zip 
 pyproject.toml
 scripts/__pycache__
 scripts/unsloth_compiled_cache
