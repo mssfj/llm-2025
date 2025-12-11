@@ -10,6 +10,7 @@ Unsloth 4bit Base Model + LoRA + vLLM で openai/gsm8k を評価するスクリ�
 
 import argparse
 import json
+import os
 from collections import Counter
 from typing import List, Dict, Any, Optional
 
@@ -19,6 +20,9 @@ from vllm.lora.request import LoRARequest
 
 from mymath_verify import verify_math_answer, MathVerifyConfig, MathVerifyResult
 
+WANDB_PROJECT = "qwen3-4b-gsm8k-100"
+WANDB_ENTITY = "mssfj-1"
+WANDB_RUNNAME = "qwen3-4b-base"
 
 def extract_gsm8k_gold_answer(answer_text: str) -> str:
     lines = [ln.strip() for ln in answer_text.splitlines() if ln.strip()]
@@ -32,8 +36,8 @@ def build_prompt(question: str) -> str:
     return (
         "You are a careful mathematical problem solver.\n"
         "Solve the following problem step by step.\n"
-        "Then on the last line, output only the final answer in the format:\n"
-        " <number>\n\n"
+        "Then, on the final line, output only the answer in the format:\n"
+        "Final Answer: <number>\n\n"
         f"Problem:\n{question}\n"
     )
 
@@ -43,6 +47,8 @@ def evaluate_gsm8k_with_vllm(
     max_samples: Optional[int] = None,
     batch_size: int = 8,
     output_path: Optional[str] = None,
+    wandb_run=None,
+    wandb_log_artifacts: bool = False,
 ) -> Dict[str, Any]:
     # データ読み込み
     ds = load_dataset("openai/gsm8k", "main", split="test")
@@ -60,7 +66,7 @@ def evaluate_gsm8k_with_vllm(
         model=model_name,
         trust_remote_code=True,
         tensor_parallel_size=1,
-        max_model_len=2048,
+        max_model_len=4096,
         
         # ★Unsloth 4bit対応の肝
         quantization="bitsandbytes", 
@@ -70,16 +76,17 @@ def evaluate_gsm8k_with_vllm(
 
         # 4bit化でメモリに余裕ができるため、0.9でもOOMしにくいですが、
         # 安全を見て0.8程度にしておくと他のプロセスと共存しやすいです
-        gpu_memory_utilization=0.3,
+        gpu_memory_utilization=0.9,
         
         enable_lora=(lora_path is not None),
-        max_lora_rank=64 if lora_path else 16,
+        max_lora_rank=32 if lora_path else 16,
     )
 
     sampling_params = SamplingParams(
         temperature=0.0,
         top_p=1.0,
-        max_tokens=256,
+        max_tokens=1024,
+        stop=["Final Answer:"],
     )
     
     prompts: List[str] = []
@@ -100,6 +107,8 @@ def evaluate_gsm8k_with_vllm(
     if lora_path:
         lora_request = LoRARequest("adapter", 1, lora_path)
 
+    outputs: List[Any] = []
+    # vLLM は内部でスケジューリングしてくれる
     outputs = llm.generate(prompts, sampling_params, lora_request=lora_request)
 
     # --- 以下評価ロジックは同じ ---
@@ -146,6 +155,26 @@ def evaluate_gsm8k_with_vllm(
         with open(output_path + ".summary.json", "w", encoding="utf-8") as f:
             json.dump(result_summary, f, ensure_ascii=False, indent=2)
 
+    if wandb_run is not None:
+        log_payload = {
+            "eval/em": em,
+            "eval/num_correct": num_correct,
+            "eval/num_total": num_total,
+        }
+        for reason_key, reason_count in reason_counter.items():
+            log_payload[f"eval/reason/{reason_key}"] = reason_count
+        wandb_run.log(log_payload)
+
+        if wandb_log_artifacts and output_path and os.path.exists(output_path):
+            import wandb
+
+            artifact = wandb.Artifact("gsm8k_eval_outputs", type="evaluation")
+            artifact.add_file(output_path)
+            summary_path = output_path + ".summary.json"
+            if os.path.exists(summary_path):
+                artifact.add_file(summary_path)
+            wandb_run.log_artifact(artifact)
+
     return result_summary
 
 def parse_args() -> argparse.Namespace:
@@ -161,24 +190,77 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--lora-path",
         type=str,
-        default="/workspace/model/qwen3_4b_dapo_sft_lora/",
-        #default="/workspace/llm-2025/model/grpo_saved_lora",
+        #default="/workspace/model/qwen3_4b_dapo_sft_lora/",
+        default="",
         help="Path to the LoRA adapter.",
     )
-    p.add_argument("--max-samples", type=int, default=20)
-    p.add_argument("--batch-size", type=int, default=4)
+    p.add_argument("--max-samples", type=int, default=100)
+    p.add_argument(
+        "--batch-size",
+        type=int,
+        default=16,
+        help="vLLM batch size (passed to max_num_seqs).",
+    )
     p.add_argument("--output-path", type=str, default="/workspace/outputs/gsm8k_eval.jsonl")
+    p.add_argument("--wandb-project", type=str, default=f"{WANDB_PROJECT}", help="W&B project name. If not set, wandb is disabled.")
+    p.add_argument("--wandb-entity", type=str, default=f"{WANDB_ENTITY}", help="W&B entity/user.")
+    p.add_argument("--wandb-run-name", type=str, default=f"{WANDB_RUNNAME}", help="Optional W&B run name.")
+    p.add_argument(
+        "--wandb-mode",
+        type=str,
+        default="online",
+        choices=["online", "offline", "disabled"],
+        help="Set to online/offline to enable W&B logging. Default is online.",
+    )
+    p.add_argument(
+        "--wandb-log-artifacts",
+        action="store_true",
+        help="Log evaluation outputs as W&B artifacts (requires --wandb-project).",
+    )
     return p.parse_args()
+
+def init_wandb(args: argparse.Namespace):
+    if args.wandb_mode == "disabled" or not args.wandb_project:
+        return None
+
+    try:
+        import wandb
+    except ImportError as exc:
+        raise RuntimeError("wandb is not installed but W&B logging was requested.") from exc
+
+    init_kwargs = {
+        "project": args.wandb_project,
+        "entity": args.wandb_entity,
+        "name": args.wandb_run_name,
+        "mode": args.wandb_mode,
+        "config": {
+            "model_name": args.model_name,
+            "lora_path": args.lora_path,
+            "max_samples": args.max_samples,
+            "batch_size": args.batch_size,
+            "output_path": args.output_path,
+        },
+    }
+    # Remove None values to keep init clean
+    init_kwargs = {k: v for k, v in init_kwargs.items() if v is not None}
+    return wandb.init(**init_kwargs)
 
 def main():
     args = parse_args()
-    evaluate_gsm8k_with_vllm(
-        model_name=args.model_name,
-        lora_path=args.lora_path,
-        max_samples=args.max_samples if args.max_samples > 0 else None,
-        batch_size=args.batch_size,
-        output_path=args.output_path,
-    )
+    wandb_run = init_wandb(args)
+    try:
+        evaluate_gsm8k_with_vllm(
+            model_name=args.model_name,
+            lora_path=args.lora_path,
+            max_samples=args.max_samples if args.max_samples > 0 else None,
+            batch_size=args.batch_size,
+            output_path=args.output_path,
+            wandb_run=wandb_run,
+            wandb_log_artifacts=args.wandb_log_artifacts,
+        )
+    finally:
+        if wandb_run is not None:
+            wandb_run.finish()
 
 if __name__ == "__main__":
     main()

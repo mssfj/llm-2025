@@ -109,4 +109,3 @@ echo "=== setup done. ==="
 echo "次回以降は:"
 echo "  cd ${PROJECT_ROOT}"
 echo "  uv run python your_script.py"
-

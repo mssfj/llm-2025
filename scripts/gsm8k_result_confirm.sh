@@ -1,5 +1,5 @@
-# 例: 10行目から20行目までを表示（Pythonのスライス仕様により、終了インデックスは含まれません）
-python - 1 3 << 'PY'
+# 例: 104 5目から20行目までを表示（Pythonのスライス仕様により、終了インデックスは含まれません）
+python - 1 20 << 'PY'
 import json
 import sys
 
@@ -41,7 +41,7 @@ for r in rows[start_idx:end_idx]:
     # get() を使ってキーが存在しない場合のエラーを回避
     idx = r.get("index", "N/A")
     print(f"index: {idx}")
-    print("Q:", r.get("question", "").strip()[:100] + "..." if len(r.get("question", "")) > 100 else r.get("question", ""))
+    print("Q:", r.get("question", "") if len(r.get("question", "")) > 100 else r.get("question", ""))
     print("GOLD:", r.get("gold_answer", ""))
     print("PRED_EXTRACTED:", r.get("extracted_pred_answer", ""))
     
@@ -55,6 +55,6 @@ for r in rows[start_idx:end_idx]:
     print("--- FULL MODEL OUTPUT (Snippet) ---")
     output = r.get("model_output", "")
     # 出力が長すぎる場合は末尾500文字だけ表示するなど調整
-    print(output[-500:] if len(output) > 500 else output)
+    print(output[-500:] if len(output) > 5000 else output)
     print()
 PY
