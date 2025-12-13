@@ -20,9 +20,13 @@ from transformers import AutoTokenizer
 
 WANDB_PROJECT = "qwen3-4b-gsm8k-100"
 WANDB_ENTITY = "mssfj-1"
-WANDB_RUNNAME = "qwen3-4b-openmathinst2-sft-10000"
+WANDB_RUNNAME = "qwen3-4b-openmathinst2-sft-1000_2048"
 
 MODEL_NAME = "unsloth/Qwen3-4B-bnb-4bit"
+
+LORA_PATH = "/workspace/model/qwen3_sft_lora_openmathinst2-1000/"
+OUTPUT_PATH = "/workspace/outputs/gsm8k_eval_1000_2048.jsonl"
+
 
 def extract_gsm8k_gold_answer(answer_text: str) -> str:
     lines = [ln.strip() for ln in answer_text.splitlines() if ln.strip()]
@@ -85,7 +89,7 @@ def evaluate_gsm8k_with_vllm(
     sampling_params = SamplingParams(
         temperature=0.0,
         top_p=1.0,
-        max_tokens=1024,
+        max_tokens=2048,
         stop=None, # "Final Answer:" で止まらないように削除
     )
     
@@ -182,28 +186,12 @@ def evaluate_gsm8k_with_vllm(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument(
-        "--model-name",
-        type=str,
-        default=MODEL_NAME,
-        help="Hugging Face 4-bit base model name.",
-    )
-    p.add_argument(
-        "--lora-path",
-        type=str,
-        default="/workspace/model/qwen3_sft_lora_openmathinst2-10000/",
-        #default="",
-        help="Path to the LoRA adapter.",
-    )
+    p.add_argument("--model-name",type=str,default=f"{MODEL_NAME}",help="Hugging Face 4-bit base model name.")
+    p.add_argument("--lora-path",type=str,default=LORA_PATH,help="Path to the LoRA adapter.")
     p.add_argument("--max-samples", type=int, default=100)
-    p.add_argument(
-        "--batch-size",
-        type=int,
-        default=16,
-        help="vLLM batch size (passed to max_num_seqs).",
-    )
-    p.add_argument("--output-path", type=str, default="/workspace/outputs/gsm8k_eval.jsonl")
-    p.add_argument("--wandb-project", type=str, default=f"{WANDB_PROJECT}", help="W&B project name. If not set, wandb is disabled.")
+    p.add_argument("--batch-size", type=int,default=16,help="vLLM batch size (passed to max_num_seqs).")
+    p.add_argument("--output-path", type=str, default=f"{OUTPUT_PATH}")
+    p.add_argument("--wandb-project", type=str, default=f"{WANDB_PROJECT}", help="W&B project name.")
     p.add_argument("--wandb-entity", type=str, default=f"{WANDB_ENTITY}", help="W&B entity/user.")
     p.add_argument("--wandb-run-name", type=str, default=f"{WANDB_RUNNAME}", help="Optional W&B run name.")
     p.add_argument(

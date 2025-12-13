@@ -10,18 +10,21 @@ import re
 from itertools import islice
 
 # ========= Settings =========
-# Qwen2.5-3B-Instruct (Adjust if using a specific local model path)
 MODEL_NAME = "unsloth/Qwen3-4B-Base"
+LORA_NAME = "Qwen3_sft_lora_openmathinst2-1000"
+
 DATASET_NAME = "mssfj/openmathinstruct-2_formatted"
 DATASET_SUBSET = "default"
-DATASET_DOWNLOAD_SAMPLES = 50_000
-DATASET_TRAIN_SAMPLES = 10_000
+DATASET_DOWNLOAD_SAMPLES = 10_000
+DATASET_TRAIN_SAMPLES = 1_000
 DATASET_ALLOWED_CATEGORIES = {"augmented_math", "math"}
 
 MAX_SEQ_LENGTH = 2048
-WANDB_PROJECT = "qwen3-4b-gsm8k-100"
+
+WANDB_PROJECT = "qwen3-4b-sft-openmathinst2"
+WANDB_RUNNAME = "qwen3-openmathinst2-sft_1000"
 WANDB_ENTITY = "mssfj-1"
-WANDB_RUNNAME = "qwen-openmathinst2-sft_1000"
+
 MODEL_DIR = "/workspace/model"
 CHECKPOINT_DIR = "/workspace/checkpoints"
 
@@ -204,7 +207,7 @@ generate_samples(model, tokenizer, dataset_dict["test"])
 wandb.init(project=WANDB_PROJECT, entity=WANDB_ENTITY, name=WANDB_RUNNAME)
 
 sft_config = SFTConfig(
-    output_dir = f"{CHECKPOINT_DIR}/qwen_sft_openmathinst2-10000",
+    output_dir = f"{CHECKPOINT_DIR}/{LORA_NAME}",
     per_device_train_batch_size = 2,
     gradient_accumulation_steps = 4,
     learning_rate = 5e-5,
@@ -237,6 +240,6 @@ print("Starting Unsloth SFT...")
 trainer.train()
 
 # ========= Save =========
-model.save_pretrained(f"{MODEL_DIR}/qwen3_sft_lora_openmathinst2-10000")
-tokenizer.save_pretrained(f"{MODEL_DIR}/qwen3_sft_lora_openmathinst2-10000")
+model.save_pretrained(f"{MODEL_DIR}/{LORA_NAME}")
+tokenizer.save_pretrained(f"{MODEL_DIR}/{LONA_NAME}")
 print("Training finished and model saved.")
