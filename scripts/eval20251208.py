@@ -2,10 +2,6 @@
 # eval.py
 """
 Unsloth 4bit Base Model + LoRA + vLLM で openai/gsm8k を評価するスクリプト。
-
-変更点:
-  - quantization="bitsandbytes" を追加 (Unsloth 4bit対応)
-  - load_format="bitsandbytes" を追加
 """
 
 import argparse
@@ -20,9 +16,13 @@ from vllm.lora.request import LoRARequest
 
 from mymath_verify import verify_math_answer, MathVerifyConfig, MathVerifyResult
 
+from transformers import AutoTokenizer
+
 WANDB_PROJECT = "qwen3-4b-gsm8k-100"
 WANDB_ENTITY = "mssfj-1"
-WANDB_RUNNAME = "qwen3-4b-base"
+WANDB_RUNNAME = "qwen3-4b-openmathinst2-sft-10000"
+
+MODEL_NAME = "unsloth/Qwen3-4B-bnb-4bit"
 
 def extract_gsm8k_gold_answer(answer_text: str) -> str:
     lines = [ln.strip() for ln in answer_text.splitlines() if ln.strip()]
@@ -32,14 +32,16 @@ def extract_gsm8k_gold_answer(answer_text: str) -> str:
             return after
     return lines[-1] if lines else ""
 
-def build_prompt(question: str) -> str:
-    return (
-        "You are a careful mathematical problem solver.\n"
-        "Solve the following problem step by step.\n"
-        "Then, on the final line, output only the answer in the format:\n"
-        "Final Answer: <number>\n\n"
-        f"Problem:\n{question}\n"
-    )
+# チャットテンプレートを適用するためトークナイザを定義する
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+
+def build_prompt(question: str, tokenizer) -> str:
+    messages = [
+        {"role": "system", "content": "You are a careful mathematical problem solver."},
+        {"role": "user", "content": f"Solve the following problem step by step.\nProblem:\n{question}\nOutput the answer in the format: Final Answer: <number>"}
+    ]
+    # トークナイザーのテンプレートを適用
+    return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
 def evaluate_gsm8k_with_vllm(
     model_name: str,
@@ -50,48 +52,46 @@ def evaluate_gsm8k_with_vllm(
     wandb_run=None,
     wandb_log_artifacts: bool = False,
 ) -> Dict[str, Any]:
+    
+    # --- 修正1: ここでトークナイザーをロードします ---
+    print(f"Loading Tokenizer from: {model_name}")
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    # ----------------------------------------------
+
     # データ読み込み
     ds = load_dataset("openai/gsm8k", "main", split="test")
     if max_samples is not None:
         ds = ds.select(range(min(max_samples, len(ds))))
 
-    print(f"Loaded GSM8K test split: {len(ds)} samples")
     print(f"Loading 4-bit Quantized Base Model: {model_name}")
-    
+
     if lora_path:
         print(f"Enabling LoRA with adapter: {lora_path}")
 
-    # ★修正箇所: 4bit (bitsandbytes) 設定を追加
     llm = LLM(
         model=model_name,
         trust_remote_code=True,
         tensor_parallel_size=1,
         max_model_len=4096,
-        
-        # ★Unsloth 4bit対応の肝
-        quantization="bitsandbytes", 
+        quantization="bitsandbytes",
         load_format="bitsandbytes",
-
         enforce_eager=True,
-
-        # 4bit化でメモリに余裕ができるため、0.9でもOOMしにくいですが、
-        # 安全を見て0.8程度にしておくと他のプロセスと共存しやすいです
         gpu_memory_utilization=0.9,
-        
         enable_lora=(lora_path is not None),
         max_lora_rank=32 if lora_path else 16,
     )
 
+    # ★重要: Stop Tokenの設定変更（前回の指摘事項）
     sampling_params = SamplingParams(
         temperature=0.0,
         top_p=1.0,
         max_tokens=1024,
-        stop=["Final Answer:"],
+        stop=None, # "Final Answer:" で止まらないように削除
     )
     
-    prompts: List[str] = []
     gold_answers: List[str] = []
     raw_questions: List[str] = []
+    prompts: List[str] = []  # ★ここも初期化が必要です（前回の指摘事項）
 
     for ex in ds:
         q = ex["question"]
@@ -99,7 +99,10 @@ def evaluate_gsm8k_with_vllm(
         gold = extract_gsm8k_gold_answer(gold_full)
         raw_questions.append(q)
         gold_answers.append(gold)
-        prompts.append(build_prompt(q))
+        
+        # --- 修正2: ここで tokenizer を渡します ---
+        prompts.append(build_prompt(q, tokenizer)) 
+        # ----------------------------------------
 
     print("Running vLLM generation...")
     
@@ -182,16 +185,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--model-name",
         type=str,
-        # ★重要: ここにはUnslothの「4bit版」モデル名を指定します
-        # 例: unsloth/Qwen2.5-7B-Instruct-bnb-4bit
-        default="unsloth/Qwen3-4B-bnb-4bit",
+        default=MODEL_NAME,
         help="Hugging Face 4-bit base model name.",
     )
     p.add_argument(
         "--lora-path",
         type=str,
-        #default="/workspace/model/qwen3_4b_dapo_sft_lora/",
-        default="",
+        default="/workspace/model/qwen3_sft_lora_openmathinst2-10000/",
+        #default="",
         help="Path to the LoRA adapter.",
     )
     p.add_argument("--max-samples", type=int, default=100)
@@ -250,13 +251,13 @@ def main():
     wandb_run = init_wandb(args)
     try:
         evaluate_gsm8k_with_vllm(
-            model_name=args.model_name,
-            lora_path=args.lora_path,
-            max_samples=args.max_samples if args.max_samples > 0 else None,
-            batch_size=args.batch_size,
-            output_path=args.output_path,
-            wandb_run=wandb_run,
-            wandb_log_artifacts=args.wandb_log_artifacts,
+            model_name = args.model_name,
+            lora_path = args.lora_path,
+            max_samples = args.max_samples if args.max_samples > 0 else None,
+            batch_size = args.batch_size,
+            output_path = args.output_path,
+            wandb_run = wandb_run,
+            wandb_log_artifacts = args.wandb_log_artifacts,
         )
     finally:
         if wandb_run is not None:
