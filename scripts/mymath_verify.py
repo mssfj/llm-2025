@@ -28,12 +28,22 @@ from sympy.core.sympify import SympifyError
 # =========================
 
 _FINAL_ANSWER_PATTERNS = [
-    r"final answer[:：]\s*(.+)",        # Final Answer: xx
-    r"最終解[:：]\s*(.+)",             # 最終解: xx
-    r"答えは[:：]\s*(.+)",             # 答えは: xx
-    r"答え[:：]\s*(.+)",               # 答え: xx
-    r"最終的な答えは[:：]\s*(.+)",     # 最終的な答えは: xx
+    r"final\s*answer\s*(?:[:：=]|is\b|->|⇒|=>)\s*(.+)",   # Final Answer: / Final Answer is / Final Answer -> xx
+    r"final\s*ans\s*(?:[:：=]|is\b|->|⇒|=>)\s*(.+)",      # Final Ans: xx
+    r"(?:the\s+)?answer\s*(?:is\b|[:：=])\s*(.+)",        # (The) answer is: xx
+    r"最終解\s*(?:[:：=は]|です)\s*(.+)",                 # 最終解: xx
+    r"最終答え\s*(?:[:：=は]|です)\s*(.+)",               # 最終答え: xx
+    r"最終的な答えは\s*(?:[:：=])?\s*(.+)",               # 最終的な答えは: xx
+    r"答えは\s*(?:[:：=])?\s*(.+)",                       # 答えは: xx
+    r"答え\s*(?:[:：=は]|です)\s*(.+)",                   # 答え: xx
 ]
+
+
+@dataclass
+class ExtractedAnswer:
+    answer: str
+    has_final_answer: bool
+    source: str
 
 
 def _normalize_text(s: str) -> str:
@@ -46,45 +56,119 @@ def _normalize_text(s: str) -> str:
     return s
 
 
+def _strip_trailing_punct(s: str) -> str:
+    """末尾の句読点・記号ゆらぎを吸収"""
+    return re.sub(r"[，,。．、!！?？]+$", "", s).strip()
+
+
+def _strip_markdown_wrappers(s: str) -> str:
+    """
+    Markdown/LaTeX 由来の装飾記号（**, *, `, $, \\( \\)）を外側から取り除く。
+    末尾にだけ残った ** のようなケースも考慮し、前後の装飾を削る。
+    """
+    s = s.strip()
+    # 対応する両端がある場合
+    if (s.startswith("**") and s.endswith("**")) or (s.startswith("__") and s.endswith("__")):
+        s = s[2:-2].strip()
+    elif (s.startswith("*") and s.endswith("*")) or (s.startswith("_") and s.endswith("_")):
+        s = s[1:-1].strip()
+    elif s.startswith("`") and s.endswith("`"):
+        s = s[1:-1].strip()
+    elif s.startswith("$") and s.endswith("$"):
+        s = s[1:-1].strip()
+    elif s.startswith("\\(") and s.endswith("\\)"):
+        s = s[2:-2].strip()
+
+    # 末尾だけに残った装飾を削る（例: "26**"）
+    s = re.sub(r"[`*_]+$", "", s).strip()
+    s = re.sub(r"^[`*_]+", "", s).strip()
+    return s
+
+
+def _postprocess_candidate(s: str) -> str:
+    """正規化＋装飾/末尾記号の削除をまとめて行う"""
+    s = _normalize_text(s)
+    s = _strip_markdown_wrappers(s)
+    return _strip_trailing_punct(s)
+
+
+_NUMERIC_TOKEN_RE = re.compile(r"[-+]?\d+(?:\.\d+)?(?:/\d+)?")
+
+
+def _extract_numeric_token(text: str) -> Optional[str]:
+    """行からそれらしい数値/分数トークンを抜き出す"""
+    m = _NUMERIC_TOKEN_RE.search(text)
+    if m:
+        return _postprocess_candidate(m.group(0))
+    return None
+
+
 def extract_final_answer(raw_text: str) -> str:
+    return extract_final_answer_with_meta(raw_text).answer
+
+
+def extract_final_answer_with_meta(raw_text: str) -> ExtractedAnswer:
     """
     CoT込みの生成テキストから「最終的な答え」っぽい部分を抜き出す。
 
     ルール：
       1. Final Answer / 答え / 最終解 パターンを優先的にマッチ
-      2. 見つからなければ、最後の行の「数字または式」っぽい部分を返す
+      2. 見つからなければ、キーワードを含む行の数値っぽい部分を拾う
+      3. それも無ければ最後の行の「数字または式」っぽい部分を返す
+    has_final_answer は「明示的に最終解答として提示されているか」を表す。
     """
     text = raw_text.strip()
+    if not text:
+        return ExtractedAnswer("", False, "empty")
 
     # 1) パターンマッチで抜き出す
-    lowered = text.lower()
     for pat in _FINAL_ANSWER_PATTERNS:
-        m = re.search(pat, lowered, flags=re.IGNORECASE)
+        m = re.search(pat, text, flags=re.IGNORECASE)
         if m:
             candidate = m.group(1)
-            return _normalize_text(candidate)
+            candidate = _postprocess_candidate(candidate)
+            if candidate:
+                token = _extract_numeric_token(candidate)
+                return ExtractedAnswer(token if token else candidate, True, "pattern")
 
-    # 2) 行ごとに見て最後の「それっぽい」トークンを拾う
+    # 2) 行ごとに見て「Final Answer」「答え」などのキーワードを含む行を優先
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     if not lines:
-        return ""
+        return ExtractedAnswer("", False, "empty_lines")
 
+    keyword_re = re.compile(r"(final answer|final ans|answer|最終解|最終答え|答え)", flags=re.IGNORECASE)
+    for ln in reversed(lines):
+        if keyword_re.search(ln):
+            token = _extract_numeric_token(ln)
+            if token:
+                return ExtractedAnswer(token, True, "keyword_line")
+            candidate = _postprocess_candidate(ln)
+            token = _extract_numeric_token(candidate)
+            return ExtractedAnswer(token if token else candidate, True, "keyword_line")
+
+    # 3) キーワードが無ければ、最後の行の「それっぽい」トークンを拾う
     last = lines[-1]
-
-    # 数式 or 数字だけが書かれている場合を優先
-    # 例: "したがって、答えは 24 である。"
-    # → 数字だけ抜く
-    # 数字 or 分数 or 小数 or マイナスを含むトークンを拾う
-    num_pattern = re.compile(r"[-+]?\d+(\.\d+)?(/\d+)?")
-    nums = num_pattern.findall(last)
-    if nums:
-        # findallはタプルを返すので、searchで1個拾い直す
-        m = num_pattern.search(last)
-        if m:
-            return _normalize_text(m.group(0))
+    token = _extract_numeric_token(last)
+    if token:
+        # 最終行が単独の数値だけなら最終回答として扱う
+        clean_last = _normalize_text(_postprocess_candidate(last))
+        bare_answer = (
+            len(lines) == 1
+            or clean_last == token
+            or len(clean_last.split()) <= 3  # 数字＋簡単な単位程度
+        )
+        return ExtractedAnswer(token, bare_answer, "fallback")
 
     # 何も取れなければ行全体を返す
-    return _normalize_text(last)
+    candidate = _postprocess_candidate(last)
+    token = _extract_numeric_token(candidate)
+    answer = token if token else candidate
+    tokens = candidate.split()
+    has_final = (
+        len(lines) == 1
+        or (token is not None and len(tokens) <= 3)  # 数字＋簡単な単位程度なら最終回答扱い
+    )
+    return ExtractedAnswer(answer, has_final, "fallback")
 
 
 # =========================
@@ -179,6 +263,7 @@ class MathVerifyConfig:
     use_sympy: bool = True           # SymPy等価性チェック
     rel_tol: float = 1e-6
     abs_tol: float = 1e-9
+    require_final_answer: bool = True  # 最終回答の明示が無ければ不正解扱いにする
 
 
 @dataclass
@@ -197,15 +282,24 @@ def verify_math_answer(
     """
     math-verify のメイン関数。
     - CoT込みpred_textから最終答えを抽出
-    - gold_answer と比較
+    - gold_answer と比較（require_final_answer が True の場合、最終解答が明示されていなければ不正解）
     - is_correct / reason を返す
     """
     if config is None:
         config = MathVerifyConfig()
 
     gold = _normalize_text(gold_answer)
-    pred_raw = extract_final_answer(pred_text)
+    extracted = extract_final_answer_with_meta(pred_text)
+    pred_raw = extracted.answer
     pred = _normalize_text(pred_raw)
+
+    if config.require_final_answer and not extracted.has_final_answer:
+        return MathVerifyResult(
+            is_correct=False,
+            reason="missing_final_answer",
+            pred_answer=pred,
+            gold_answer=gold,
+        )
 
     # 1) 完全一致
     if config.use_exact and pred == gold:
@@ -268,4 +362,3 @@ def math_reward(
     result = verify_math_answer(pred_text, gold_answer, config=config)
     reward = correct_reward if result.is_correct else wrong_reward
     return reward, result
-

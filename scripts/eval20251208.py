@@ -20,12 +20,13 @@ from transformers import AutoTokenizer
 
 WANDB_PROJECT = "qwen3-4b-gsm8k-100"
 WANDB_ENTITY = "mssfj-1"
-WANDB_RUNNAME = "qwen3-4b-openmathinst2-sft-1000_2048"
+WANDB_RUNNAME = "qwen3-4b-base"
 
 MODEL_NAME = "unsloth/Qwen3-4B-bnb-4bit"
 
-LORA_PATH = "/workspace/model/qwen3_sft_lora_openmathinst2-1000/"
-OUTPUT_PATH = "/workspace/outputs/gsm8k_eval_1000_2048.jsonl"
+#LORA_PATH = "/workspace/model/qwen3_sft_lora_openmathinst2-1000/"
+LORA_PATH = ""
+OUTPUT_PATH = "/workspace/outputs/gsm8k_eval_qwen3-4b-base.jsonl"
 
 
 def extract_gsm8k_gold_answer(answer_text: str) -> str:
@@ -119,7 +120,7 @@ def evaluate_gsm8k_with_vllm(
     outputs = llm.generate(prompts, sampling_params, lora_request=lora_request)
 
     # --- 以下評価ロジックは同じ ---
-    config = MathVerifyConfig(use_exact=True, use_numeric=True, use_sympy=True)
+    config = MathVerifyConfig(use_exact=True, use_numeric=True, use_sympy=True, require_final_answer=True)
     num_correct = 0
     num_total = len(outputs)
     reason_counter: Counter = Counter()
