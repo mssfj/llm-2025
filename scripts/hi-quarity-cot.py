@@ -25,7 +25,7 @@ Do not add any extra text."""
 USER_PROMPT_TEMPLATE = """We have a mathematical problem and its correct solution.
 
 Based strictly on the contents of <question></question> and <solution></solution> below,
-rewrite the reasoning into the following structured format.
+the following structured format.
 
 Rules:
 1. Assume the given solution is correct.
@@ -51,6 +51,7 @@ plan is a blueprint that guides the reason; plan so that it does not become a su
 Explain why the chosen strategy is valid and why no cases are missing.
 verify must be at most 2–3 sentences and must reference only the key correctness checks for this specific problem.
 </verify>
+</think>
 
 Here is the input:
 
@@ -80,9 +81,13 @@ REQUIRED_MARKERS = [
     "Final Answer:",
 ]
 SKIP_ANSWER_SUBSTRINGS = [
+    "however",
+    "However",
     "however, the original solution reported",
     "the provided solution says",
     "so we accept",
+    "expected value",
+	"expected number",
 ]
 
 
@@ -392,6 +397,8 @@ def main() -> None:
                 response = f"{response}\n{cleaned_solution}"
                 response = ensure_closing_think(response)
                 response = remove_boxed_in_reason(response)
+                response = ensure_halfwidespace_after_final_answer(response)
+
                 if not has_required_markers(response):
                     sys.stderr.write(
                         f"\nSkipping record {idx}/{total_records}: missing required tags.\n"
@@ -406,8 +413,6 @@ def main() -> None:
                     sys.stderr.write("\r" + render_progress(idx, total_records))
                     sys.stderr.flush()
                     continue
-
-                response = ensure_halfwidespace_after_final_answer(response)
 
                 out_record = {
                     "question": question,
