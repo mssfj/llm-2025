@@ -309,6 +309,13 @@ def should_skip_answer(text: str) -> bool:
     return bool(re.search(r"indicating that.*admit additional", lowered, flags=re.DOTALL))
 
 
+def ensure_halfwidespace_after_final_answer(text: str) -> str:
+    """Insert a halfwidespace right after the first 'Final Answer:' if it's missing."""
+    if "Final Answer: " in text or "Final Answer:" not in text:
+        return text
+    return text.replace("Final Answer:", "Final Answer: ", 1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate structured CoT outputs with OpenRouter on openmathinstruct-2_formatted."
@@ -399,7 +406,9 @@ def main() -> None:
                     sys.stderr.write("\r" + render_progress(idx, total_records))
                     sys.stderr.flush()
                     continue
-                
+
+                response = ensure_halfwidespace_after_final_answer(response)
+
                 out_record = {
                     "question": question,
                     "answer": response,
