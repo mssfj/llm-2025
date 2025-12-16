@@ -10,3 +10,5 @@ pyproject.toml
 scripts/__pycache__
 scripts/unsloth_compiled_cache
 scripts/=2.19
+dataset
+out.jsonl

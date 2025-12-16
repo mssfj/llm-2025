@@ -52,14 +52,6 @@ Explain why the chosen strategy is valid and why no cases are missing.
 verify must be at most 2–3 sentences and must reference only the key correctness checks for this specific problem.
 </verify>
 
-<reason>
-Rewrite the detailed step-by-step reasoning from the provided solution.
-If you list candidate points, explicitly check each against all inequalities.
-</reason>
-</think>
-
-Final Answer: (same as the original solution.Always include a half-width space after "Final Answer:".
-
 Here is the input:
 
 <question>
@@ -187,6 +179,28 @@ def strip_think_blocks(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
+def extract_think_content(text: str) -> str:
+    # <think>と</think>の間にある文字列(group 1)を抽出する
+    match = re.search(r"<think>(.*?)</think>", text, flags=re.DOTALL)
+    
+    if match:
+        # 見つかった場合、タグの中身だけを返却（前後の空白はstripで削除）
+        return match.group(1).strip()
+    else:
+        # タグが見つからない場合は空文字を返す（要件に応じてNoneでも可）
+        return ""
+
+
+def rename_think_to_reason(text: str) -> str:
+    # <(/?)think> の意味:
+    #   </?   -> "/" があってもなくてもマッチ（開始タグと終了タグの両方に対応）
+    #   (...) -> "/" の有無をグループ1として記憶
+    #
+    # r"<\1reason>" の意味:
+    #   \1    -> グループ1で記憶した "/" をここに復元（開始タグなら空、終了タグなら"/"が入る）
+    return re.sub(r"<(/?)think>", r"<\1reason>", text)
+
+
 def replace_reason_with_solution(text: str, solution: str) -> str:
     # Force <reason>...</reason> to contain the provided solution (without think blocks).
     cleaned_solution = strip_think_blocks(solution)
@@ -259,6 +273,29 @@ def render_progress(current: int, total: int, width: int = 40) -> str:
     progress = int((current / total) * width)
     bar = "#" * progress + "-" * (width - progress)
     return f"[{bar}] {current}/{total}"
+
+
+def append_final_answer_line(response: str, solution: str) -> str:
+    """
+    Append the last line containing 'Final Answer:' from the solution to the response.
+    If a Final Answer already exists in the response, replace the last occurrence to keep it single.
+    """
+    final_answer_line = ""
+    for line in reversed(solution.splitlines()):
+        if "Final Answer:" in line:
+            final_answer_line = line.strip()
+            break
+    if not final_answer_line:
+        return response
+
+    response = response.rstrip()
+    if "Final Answer:" in response:
+        lines = response.splitlines()
+        for idx in range(len(lines) - 1, -1, -1):
+            if "Final Answer:" in lines[idx]:
+                lines[idx] = final_answer_line
+                return "\n".join(lines)
+    return f"{response}\n{final_answer_line}"
 
 
 def has_required_markers(text: str) -> bool:
@@ -344,9 +381,9 @@ def main() -> None:
                     {"role": "user", "content": user_prompt},
                 ]
                 response = call_openrouter(api_key, messages, args.model)
+                cleaned_solution = rename_think_to_reason(solution)
+                response = f"{response}\n{cleaned_solution}"
                 response = ensure_closing_think(response)
-                response = strip_final_answer_in_think(response)
-                #response = replace_reason_with_solution(response, solution)
                 response = remove_boxed_in_reason(response)
                 if not has_required_markers(response):
                     sys.stderr.write(

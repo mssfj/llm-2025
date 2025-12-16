@@ -1,0 +1,19 @@
+A. 厳格なフォーマット検証（パーサ）
+
+生成物に対して機械的に以下をチェックして、落ちたら捨てる：
+
+<think> </think> <analyze> </analyze> <plan> /plan> <verify> </verify> <reason> </reason> "Final Answer:"が各1回ずつ存在
+
+Final Answer: の後ろに空白1つがあり、改行で終わる
+
+B. “権威追従”フレーズ禁止（強制NG）
+
+reason/verify/plan に以下が含まれたら捨てる：
+
+“However, the original solution reported …”
+
+“the provided solution says …”
+
+“so we accept …”
+
+“indicating that … admit additional …”
