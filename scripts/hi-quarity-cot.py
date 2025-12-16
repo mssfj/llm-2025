@@ -55,7 +55,6 @@ verify must be at most 2–3 sentences and must reference only the key correctne
 <reason>
 Rewrite the detailed step-by-step reasoning from the provided solution.
 If you list candidate points, explicitly check each against all inequalities.
-If the algebra implies no solution, output the dataset’s canonical form as Final Answer.
 </reason>
 </think>
 
@@ -163,6 +162,21 @@ def ensure_closing_think(text: str) -> str:
     if "</reason>" in text and "</think>" not in text:
         return text.replace("</reason>", "</reason>\n</think>", 1)
     return text
+
+
+def strip_think_blocks(text: str) -> str:
+    # Remove complete <think>...</think> blocks from the original solution.
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+def replace_reason_with_solution(text: str, solution: str) -> str:
+    # Force <reason>...</reason> to contain the provided solution (without think blocks).
+    cleaned_solution = strip_think_blocks(solution)
+    replacement = f"<reason>\n{cleaned_solution}\n</reason>"
+    if "<reason>" in text and "</reason>" in text:
+        return re.sub(r"<reason>.*?</reason>", replacement, text, flags=re.DOTALL)
+    suffix = "\n" if not text.endswith("\n") else ""
+    return f"{text}{suffix}{replacement}"
 
 
 def _strip_boxed(content: str) -> str:
@@ -290,28 +304,35 @@ def main() -> None:
 
     with open(args.output, "w", encoding="utf-8") as out_f:
         for idx, record in enumerate(records, start=1):
-            question = record.get("question", "")
-            solution = record.get("answer", "")
-            category = record.get("category", "")
+            try:
+                question = record.get("question", "")
+                solution = record.get("answer", "")
+                category = record.get("category", "")
 
-            user_prompt = build_user_prompt(question, solution)
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ]
-            response = call_openrouter(api_key, messages, args.model)
-            response = ensure_closing_think(response)
-            response = strip_final_answer_in_think(response)
-            response = remove_boxed_in_reason(response)
-            
-            out_record = {
-                "question": question,
-                "answer": response,
-                "category": category,
-            }
+                user_prompt = build_user_prompt(question, solution)
+                messages = [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ]
+                response = call_openrouter(api_key, messages, args.model)
+                response = ensure_closing_think(response)
+                response = strip_final_answer_in_think(response)
+                #response = replace_reason_with_solution(response, solution)
+                response = remove_boxed_in_reason(response)
+                
+                out_record = {
+                    "question": question,
+                    "answer": response,
+                    "category": category,
+                }
 
-            out_f.write(json.dumps(out_record, ensure_ascii=False) + "\n")
-            out_f.flush()
+                out_f.write(json.dumps(out_record, ensure_ascii=False) + "\n")
+                out_f.flush()
+            except Exception as exc:
+                sys.stderr.write(
+                    f"\nError processing record {idx}/{total_records}: {exc}\n"
+                )
+                continue
             sys.stderr.write("\r" + render_progress(idx, total_records))
             sys.stderr.flush()
     sys.stderr.write("\nDone.\n")
