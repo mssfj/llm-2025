@@ -74,6 +74,24 @@ Here is the input:
 DEFAULT_MODEL = "openai/gpt-oss-120b"
 DEFAULT_DATASET = "dataset/openmathinstruct-2_formatted/openmathinstruct2_formatted_10000.jsonl"
 ALLOWED_CATEGORIES = {"augmented_math", "math"}
+REQUIRED_MARKERS = [
+    "<think>",
+    "</think>",
+    "<analyze>",
+    "</analyze>",
+    "<plan>",
+    "</plan>",
+    "<verify>",
+    "</verify>",
+    "<reason>",
+    "</reason>",
+    "Final Answer:",
+]
+SKIP_ANSWER_SUBSTRINGS = [
+    "however, the original solution reported",
+    "the provided solution says",
+    "so we accept",
+]
 
 
 def read_filtered_records(path: str) -> Iterable[Dict[str, str]]:
@@ -243,6 +261,17 @@ def render_progress(current: int, total: int, width: int = 40) -> str:
     return f"[{bar}] {current}/{total}"
 
 
+def has_required_markers(text: str) -> bool:
+    return all(text.count(marker) == 1 for marker in REQUIRED_MARKERS)
+
+
+def should_skip_answer(text: str) -> bool:
+    lowered = text.lower()
+    if any(phrase in lowered for phrase in SKIP_ANSWER_SUBSTRINGS):
+        return True
+    return bool(re.search(r"indicating that.*admit additional", lowered, flags=re.DOTALL))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate structured CoT outputs with OpenRouter on openmathinstruct-2_formatted."
@@ -319,6 +348,20 @@ def main() -> None:
                 response = strip_final_answer_in_think(response)
                 #response = replace_reason_with_solution(response, solution)
                 response = remove_boxed_in_reason(response)
+                if not has_required_markers(response):
+                    sys.stderr.write(
+                        f"\nSkipping record {idx}/{total_records}: missing required tags.\n"
+                    )
+                    sys.stderr.write("\r" + render_progress(idx, total_records))
+                    sys.stderr.flush()
+                    continue
+                if should_skip_answer(response):
+                    sys.stderr.write(
+                        f"\nSkipping record {idx}/{total_records}: flagged wording in answer.\n"
+                    )
+                    sys.stderr.write("\r" + render_progress(idx, total_records))
+                    sys.stderr.flush()
+                    continue
                 
                 out_record = {
                     "question": question,
