@@ -273,11 +273,13 @@ def remove_boxed_in_reason(text: str) -> str:
     return re.sub(r"<reason>(.*?)</reason>", _clean, text, flags=re.DOTALL)
 
 
-def render_progress(current: int, total: int, width: int = 40) -> str:
+def render_progress(
+    current: int, total: int, width: int = 40, interrupted: int = 0
+) -> str:
     # Renders a simple text progress bar without external deps.
     progress = int((current / total) * width)
     bar = "#" * progress + "-" * (width - progress)
-    return f"[{bar}] {current}/{total}"
+    return f"[{bar}] {current}/{total} ({interrupted})"
 
 
 def append_final_answer_line(response: str, solution: str) -> str:
@@ -381,6 +383,7 @@ def main() -> None:
     sys.stderr.write(f"Processing {total_records} records...\n")
 
     with open(args.output, "w", encoding="utf-8") as out_f:
+        interrupted_count = 0
         for idx, record in enumerate(records, start=1):
             try:
                 question = record.get("question", "")
@@ -400,17 +403,23 @@ def main() -> None:
                 response = ensure_halfwidespace_after_final_answer(response)
 
                 if not has_required_markers(response):
+                    interrupted_count += 1
                     sys.stderr.write(
                         f"\nSkipping record {idx}/{total_records}: missing required tags.\n"
                     )
-                    sys.stderr.write("\r" + render_progress(idx, total_records))
+                    sys.stderr.write(
+                        "\r" + render_progress(idx, total_records, interrupted=interrupted_count)
+                    )
                     sys.stderr.flush()
                     continue
                 if should_skip_answer(response):
+                    interrupted_count += 1
                     sys.stderr.write(
                         f"\nSkipping record {idx}/{total_records}: flagged wording in answer.\n"
                     )
-                    sys.stderr.write("\r" + render_progress(idx, total_records))
+                    sys.stderr.write(
+                        "\r" + render_progress(idx, total_records, interrupted=interrupted_count)
+                    )
                     sys.stderr.flush()
                     continue
 
@@ -423,11 +432,18 @@ def main() -> None:
                 out_f.write(json.dumps(out_record, ensure_ascii=False) + "\n")
                 out_f.flush()
             except Exception as exc:
+                interrupted_count += 1
                 sys.stderr.write(
                     f"\nError processing record {idx}/{total_records}: {exc}\n"
                 )
+                sys.stderr.write(
+                    "\r" + render_progress(idx, total_records, interrupted=interrupted_count)
+                )
+                sys.stderr.flush()
                 continue
-            sys.stderr.write("\r" + render_progress(idx, total_records))
+            sys.stderr.write(
+                "\r" + render_progress(idx, total_records, interrupted=interrupted_count)
+            )
             sys.stderr.flush()
     sys.stderr.write("\nDone.\n")
 
