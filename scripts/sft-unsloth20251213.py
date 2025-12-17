@@ -12,10 +12,12 @@ from itertools import islice
 # ========= Settings =========
 MODEL_NAME = "unsloth/Qwen3-4B-Base"
 LORA_NAME = "Qwen3_sft_lora_openmathinst2-structured_1000"
+#RUN_NAME = LORA_NAME
+RUN_NAME = "default"
 
-DATASET_NAME = "mssfj/openmathinstruct-2_structured-1"
+DATASET_NAME = "mssfj/openmathinstruct-2_structured-1000"
 DATASET_SUBSET = "default"
-DATASET_DOWNLOAD_SAMPLES = 1_000
+DATASET_DOWNLOAD_SAMPLES = 1_446
 DATASET_TRAIN_SAMPLES = 1_000
 DATASET_TEST_SIZE = 0.2
 DATASET_ALLOWED_CATEGORIES = {"augmented_math", "math"}
@@ -208,7 +210,7 @@ generate_samples(model, tokenizer, dataset_dict["test"])
 wandb.init(project=WANDB_PROJECT, entity=WANDB_ENTITY, name=WANDB_RUNNAME)
 
 sft_config = SFTConfig(
-    output_dir = f"{CHECKPOINT_DIR}/{LORA_NAME}",
+    output_dir = f"{CHECKPOINT_DIR}/{RUN_NAME}",
     per_device_train_batch_size = 2,
     gradient_accumulation_steps = 4,
     learning_rate = 5e-5,
@@ -224,6 +226,7 @@ sft_config = SFTConfig(
     seed = 3407,
     max_seq_length = MAX_SEQ_LENGTH,
     dataset_text_field = "text",
+    overwrite_output_dir = True,  # avoid resuming old checkpoints if the directory already exists
 )
 
 # 検証用データを10件（または検証データ数の少ない方）に制限する
@@ -241,6 +244,6 @@ print("Starting Unsloth SFT...")
 trainer.train()
 
 # ========= Save =========
-model.save_pretrained(f"{MODEL_DIR}/{LORA_NAME}")
-tokenizer.save_pretrained(f"{MODEL_DIR}/{LONA_NAME}")
+model.save_pretrained(f"{MODEL_DIR}/{RUN_NAME}")
+tokenizer.save_pretrained(f"{MODEL_DIR}/{RUN_NAME}")
 print("Training finished and model saved.")
