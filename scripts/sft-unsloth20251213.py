@@ -11,18 +11,19 @@ from itertools import islice
 
 # ========= Settings =========
 MODEL_NAME = "unsloth/Qwen3-4B-Base"
-LORA_NAME = "Qwen3_sft_lora_openmathinst2-1000"
+LORA_NAME = "Qwen3_sft_lora_openmathinst2-structured_1000"
 
-DATASET_NAME = "mssfj/openmathinstruct-2_formatted"
+DATASET_NAME = "mssfj/openmathinstruct-2_structured-1"
 DATASET_SUBSET = "default"
-DATASET_DOWNLOAD_SAMPLES = 10_000
+DATASET_DOWNLOAD_SAMPLES = 1_000
 DATASET_TRAIN_SAMPLES = 1_000
+DATASET_TEST_SIZE = 0.2
 DATASET_ALLOWED_CATEGORIES = {"augmented_math", "math"}
 
 MAX_SEQ_LENGTH = 2048
 
-WANDB_PROJECT = "qwen3-4b-sft-openmathinst2"
-WANDB_RUNNAME = "qwen3-openmathinst2-sft_1000"
+WANDB_PROJECT = "qwen3-4b-sft-openmathinst2-structured"
+WANDB_RUNNAME = "qwen3-openmathinst2-sft_structured_1000"
 WANDB_ENTITY = "mssfj-1"
 
 MODEL_DIR = "/workspace/model"
@@ -82,7 +83,7 @@ def load_limited_dataset() -> Dataset:
     return Dataset.from_list(limited)
 
 raw_ds = load_limited_dataset()
-raw_ds = raw_ds.shuffle(seed=42)
+#raw_ds = raw_ds.shuffle(seed=42)
 
 filtered_ds = raw_ds.filter(
     lambda example: str(example.get("category", "")).lower() in DATASET_ALLOWED_CATEGORIES
@@ -96,7 +97,7 @@ if len(eval_source) == 0:
     eval_source = train_ds
 
 if len(eval_source) > 1:
-    valid_test = eval_source.train_test_split(test_size=0.5, seed=42)
+    valid_test = eval_source.train_test_split(test_size=DATASET_TEST_SIZE, seed=42)
     validation_ds = valid_test["train"]
     test_ds = valid_test["test"]
 else:
@@ -225,8 +226,8 @@ sft_config = SFTConfig(
     dataset_text_field = "text",
 )
 
-# 検証用データを100件（または検証データ数の少ない方）に制限する
-eval_subset = dataset_dict["validation"].select(range(min(100, len(dataset_dict["validation"]))))
+# 検証用データを10件（または検証データ数の少ない方）に制限する
+eval_subset = dataset_dict["validation"].select(range(min(10, len(dataset_dict["validation"]))))
 
 trainer = SFTTrainer(
     model = model,

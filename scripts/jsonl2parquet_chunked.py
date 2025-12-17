@@ -5,7 +5,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 # Process the JSONL file in chunks to avoid loading everything into memory.
-INPUT_PATH = Path("dataset/openmathinstruct-2_structured/openmathinstruct-2_structured-1000.jsonl")
+INPUT_PATH = Path("dataset/openmathinstruct-2_structured/openmathinstruct-2_structured-1446.jsonl")
 OUTPUT_PATH = Path("dataset/openmathinstruct-2_structured/data/train-00000-of-00001.parquet")
 CHUNK_SIZE = 100
 
