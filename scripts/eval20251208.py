@@ -2,6 +2,16 @@
 # eval.py
 """
 Unsloth 4bit Base Model + LoRA + vLLM で openai/gsm8k を評価するスクリプト。
+scripts/sft-unsloth20251213.py で学習した LoRA／ベースモデルと、ベース単体を
+model_preset で切り替えて評価できるようにした。
+
+
+RUN examples:
+
+  - Base only: python scripts/eval20251208.py --model-preset base
+  - SFT LoRA (default paths): python scripts/eval20251208.py --model-preset sft
+  - Custom combo: python scripts/eval20251208.py --model-preset custom --model-name <model> --lora-path <adapter> --output-path <file>
+
 """
 
 import argparse
@@ -9,6 +19,8 @@ import json
 import os
 from collections import Counter
 from typing import List, Dict, Any, Optional
+
+from unsloth.chat_templates import get_chat_template
 
 from datasets import load_dataset
 from vllm import LLM, SamplingParams
@@ -20,13 +32,28 @@ from transformers import AutoTokenizer
 
 WANDB_PROJECT = "qwen3-4b-gsm8k-100"
 WANDB_ENTITY = "mssfj-1"
-WANDB_RUNNAME = "qwen3-4b-openmathinst2-structured"
+WANDB_RUNNAME_SFT = "qwen3-4b-openmathinst2-structured"
+WANDB_RUNNAME_BASE = "qwen3-4b-base"
 
-MODEL_NAME = "unsloth/Qwen3-4B-bnb-4bit"
+DEFAULT_SFT_LORA_DIRNAME = "qwen3_sft_lora_openmathinst2-structured_1000"
+DEFAULT_OUTPUT_DIR = "/workspace/outputs"
 
-LORA_PATH = "/workspace/model/Qwen3_sft_lora_openmathinst2-structured_1000/"
-#LORA_PATH = ""
-OUTPUT_PATH = "/workspace/outputs/gsm8k_eval_qwen3-4b-openmathinst2-structured.jsonl"
+MODEL_PRESETS = {
+    # Base (no LoRA)
+    "base": {
+        "model_name": "unsloth/Qwen3-4B-Base",
+        "lora_path": None,
+        "wandb_run_name": WANDB_RUNNAME_BASE,
+        "output_path": f"{DEFAULT_OUTPUT_DIR}/gsm8k_eval_qwen3-4b-base.jsonl",
+    },
+    # SFT (LoRA) produced by scripts/sft-unsloth20251213.py
+    "sft": {
+        "model_name": "unsloth/Qwen3-4B-Base",
+        "lora_path": f"/workspace/model/{DEFAULT_SFT_LORA_DIRNAME}/",
+        "wandb_run_name": WANDB_RUNNAME_SFT,
+        "output_path": f"{DEFAULT_OUTPUT_DIR}/gsm8k_eval_{WANDB_RUNNAME_SFT}.jsonl",
+    },
+}
 
 def extract_gsm8k_gold_answer(answer_text: str) -> str:
     lines = [ln.strip() for ln in answer_text.splitlines() if ln.strip()]
@@ -36,15 +63,19 @@ def extract_gsm8k_gold_answer(answer_text: str) -> str:
             return after
     return lines[-1] if lines else ""
 
-# チャットテンプレートを適用するためトークナイザを定義する
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-
 def build_prompt(question: str, tokenizer) -> str:
     messages = [
         {"role": "system", "content": "You are a careful mathematical problem solver."},
         {"role": "user", "content": f"Solve the following problem step by step.\nProblem:\n{question}\nOutput the answer in the format: Final Answer: <number>"}
     ]
-    # トークナイザーのテンプレートを適用
+    
+	# Unsloth's optimized chat template for Qwen 2.5
+    tokenizer = get_chat_template(
+    	tokenizer,
+    	chat_template = "qwen-2.5",
+    	#mapping = {"role": "role", "content": "content", "user": "user", "assistant": "assistant"},
+	)
+   	# トークナイザーのテンプレートを適用
     return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
 def evaluate_gsm8k_with_vllm(
@@ -184,16 +215,52 @@ def evaluate_gsm8k_with_vllm(
 
     return result_summary
 
+def resolve_model_config(args: argparse.Namespace) -> Dict[str, Any]:
+    """
+    Choose (model_name, lora_path, output_path, wandb_run_name) from preset
+    or command line overrides so we can quickly switch between base and SFT.
+    """
+    preset = MODEL_PRESETS.get(args.model_preset, {})
+
+    model_name = args.model_name or preset.get("model_name")
+    lora_path = args.lora_path if args.lora_path is not None else preset.get("lora_path")
+    output_path = args.output_path or preset.get("output_path")
+    wandb_run_name = args.wandb_run_name or preset.get("wandb_run_name")
+
+    if not model_name:
+        raise ValueError("model_name must be provided either via --model-preset or --model-name.")
+
+    # Empty string disables LoRA
+    lora_path = lora_path if lora_path else None
+
+    if not output_path:
+        preset_key = args.model_preset or "custom"
+        output_path = f"{DEFAULT_OUTPUT_DIR}/gsm8k_eval_{preset_key}.jsonl"
+
+    return {
+        "model_name": model_name,
+        "lora_path": lora_path,
+        "output_path": output_path,
+        "wandb_run_name": wandb_run_name,
+    }
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--model-name",type=str,default=f"{MODEL_NAME}",help="Hugging Face 4-bit base model name.")
-    p.add_argument("--lora-path",type=str,default=LORA_PATH,help="Path to the LoRA adapter.")
+    p.add_argument(
+        "--model-preset",
+        choices=[*MODEL_PRESETS.keys(), "custom"],
+        default="sft",
+        help="Switch between evaluating the base model ('base') or the SFT LoRA produced by sft-unsloth20251213.py ('sft'). "
+             "Use 'custom' to rely solely on --model-name/--lora-path overrides.",
+    )
+    p.add_argument("--model-name", type=str, default=None, help="Override base model name (used directly when --model-preset=custom).")
+    p.add_argument("--lora-path", type=str, default=None, help="Override LoRA adapter path. Leave empty to disable LoRA.")
     p.add_argument("--max-samples", type=int, default=100)
-    p.add_argument("--batch-size", type=int,default=16,help="vLLM batch size (passed to max_num_seqs).")
-    p.add_argument("--output-path", type=str, default=f"{OUTPUT_PATH}")
+    p.add_argument("--batch-size", type=int, default=16, help="vLLM batch size (passed to max_num_seqs).")
+    p.add_argument("--output-path", type=str, default=None, help="Where to write evaluation outputs. Defaults depend on the preset.")
     p.add_argument("--wandb-project", type=str, default=f"{WANDB_PROJECT}", help="W&B project name.")
     p.add_argument("--wandb-entity", type=str, default=f"{WANDB_ENTITY}", help="W&B entity/user.")
-    p.add_argument("--wandb-run-name", type=str, default=f"{WANDB_RUNNAME}", help="Optional W&B run name.")
+    p.add_argument("--wandb-run-name", type=str, default=None, help="Optional W&B run name. Defaults depend on the preset.")
     p.add_argument(
         "--wandb-mode",
         type=str,
@@ -236,6 +303,18 @@ def init_wandb(args: argparse.Namespace):
 
 def main():
     args = parse_args()
+
+    resolved = resolve_model_config(args)
+    args.model_name = resolved["model_name"]
+    args.lora_path = resolved["lora_path"]
+    args.output_path = resolved["output_path"]
+    args.wandb_run_name = resolved["wandb_run_name"]
+
+    print(f"[Eval Preset] {args.model_preset}")
+    print(f" - model_name: {args.model_name}")
+    print(f" - lora_path: {args.lora_path}")
+    print(f" - output_path: {args.output_path}")
+
     wandb_run = init_wandb(args)
     try:
         evaluate_gsm8k_with_vllm(

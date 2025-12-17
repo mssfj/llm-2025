@@ -11,9 +11,9 @@ from itertools import islice
 
 # ========= Settings =========
 MODEL_NAME = "unsloth/Qwen3-4B-Base"
-LORA_NAME = "Qwen3_sft_lora_openmathinst2-structured_1000"
-#RUN_NAME = LORA_NAME
-RUN_NAME = "default"
+LORA_NAME = "qwen3_sft_lora_openmathinst2-structured_1000"
+RUN_NAME = LORA_NAME
+#RUN_NAME = "default"
 
 DATASET_NAME = "mssfj/openmathinstruct-2_structured-1000"
 DATASET_SUBSET = "default"
@@ -44,7 +44,7 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     model_name = MODEL_NAME,
     max_seq_length = MAX_SEQ_LENGTH,
     dtype = None,
-    load_in_4bit = True,
+    load_in_4bit = False,
 )
 
 model = FastLanguageModel.get_peft_model(
