@@ -152,7 +152,7 @@ def format_math_examples(examples):
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": question},
-            {"role": "assistant", "content": assistant_content},
+            {"role": "assistant", "content": assistant_content + eos_token},
         ]
 
         formatted_text = tokenizer.apply_chat_template(
