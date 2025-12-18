@@ -70,7 +70,7 @@ def extract_gsm8k_gold_answer(answer_text: str) -> str:
             after = ln.split("####", 1)[1].strip()
             return after
     return lines[-1] if lines else ""
-
+'''
 def build_prompt(question: str, tokenizer) -> str:
     messages = [
         {"role": "system", "content": "You are a careful mathematical problem solver."},
@@ -80,11 +80,51 @@ def build_prompt(question: str, tokenizer) -> str:
     # Unsloth's optimized chat template for Qwen 2.5
     tokenizer = get_chat_template(
         tokenizer,
-        chat_template = "qwen-2.5",
-        #mapping = {"role": "role", "content": "content", "user": "user", "assistant": "assistant"},
+    #    chat_template = "qwen-2.5",
+    #    #mapping = {"role": "role", "content": "content", "user": "user", "assistant": "assistant"},
     )
     # トークナイザーのテンプレートを適用
     return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+'''
+
+def build_prompt(question: str, tokenizer) -> str:
+    tokenizer = get_chat_template(tokenizer, chat_template="qwen-2.5")
+
+    system = (
+        "You are a careful mathematical problem solver.\n"
+        "You MUST follow the required output format exactly."
+    )
+
+    user = f"""Solve the following problem.
+
+Problem:
+{question}
+
+Required output format (MUST follow exactly):
+<think>
+<analyze>...</analyze>
+<plan>...</plan>
+<verify>...</verify>
+<reason>...</reason>
+</think>
+Final Answer: <number>
+
+Rules:
+- The output MUST start with <think> and end with the Final Answer line.
+- Do not omit <think> or any of the tags.
+- Do not output any extra tags like <Final Answer>.
+- Put only the final numeric answer after 'Final Answer:'.
+"""
+
+    # 生成を <think> から始めるため、assistant のプレフィックスを入れる
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+        {"role": "assistant", "content": "<think>\n"},  # ←これが効く
+    ]
+
+    return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
 
 def evaluate_gsm8k_with_vllm(
     model_name: str,
@@ -168,12 +208,16 @@ def evaluate_gsm8k_with_vllm(
     num_total = len(outputs)
     reason_counter: Counter = Counter()
     detailed_results: List[Dict[str, Any]] = []
+    model_output_lengths: List[int] = []
 
     for i, (out, q, gold) in enumerate(zip(outputs, raw_questions, gold_answers)):
         if not out.outputs:
             pred_text = ""
         else:
             pred_text = out.outputs[0].text
+
+        model_output_len = len(pred_text)
+        model_output_lengths.append(model_output_len)
 
         res: MathVerifyResult = verify_math_answer(pred_text, gold, config=config)
         if res.is_correct:
@@ -182,6 +226,7 @@ def evaluate_gsm8k_with_vllm(
 
         detailed_results.append({
             "index": i, "question": q, "gold_answer": gold, "model_output": pred_text,
+            "model_output_length": model_output_len,
             "extracted_pred_answer": res.pred_answer, "is_correct": res.is_correct, "reason": res.reason
         })
 
@@ -189,14 +234,24 @@ def evaluate_gsm8k_with_vllm(
             print(f"Processed {i+1}/{num_total} samples")
 
     em = num_correct / max(num_total, 1)
+    total_model_output_chars = sum(model_output_lengths)
+    avg_model_output_chars = total_model_output_chars / num_total if num_total > 0 else 0.0
+    max_model_output_chars = max(model_output_lengths) if model_output_lengths else 0
+
     print(f"\n==== Evaluation Result ====")
-    print(f"Base Model (4bit): {model_name}")
+    print(f"Base Model : {model_name}")
     print(f"LoRA Path: {lora_path}")
     print(f"EM: {em:.4f}")
+    print(f"Total model_output chars: {total_model_output_chars}")
+    print(f"Avg model_output chars: {avg_model_output_chars:.2f}")
+    print(f"Max model_output chars: {max_model_output_chars}")
 
     result_summary = {
         "model_name": model_name, "lora_path": lora_path, "num_samples": num_total,
         "num_correct": num_correct, "em": em, "reason_counts": dict(reason_counter),
+        "model_output_char_total": total_model_output_chars,
+        "model_output_char_avg": avg_model_output_chars,
+        "model_output_char_max": max_model_output_chars,
     }
 
     if output_path:
