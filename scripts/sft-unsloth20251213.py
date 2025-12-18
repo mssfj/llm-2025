@@ -30,7 +30,7 @@ WANDB_ENTITY = "mssfj-1"
 
 MODEL_DIR = "/workspace/model"
 CHECKPOINT_DIR = "/workspace/checkpoints"
-'''
+
 SYSTEM_PROMPT = (
     "You are given a math problem.\n"
     "First, think about the problem step by step and show your reasoning.\n"
@@ -38,10 +38,6 @@ SYSTEM_PROMPT = (
     "Then, output the final answer after Final Answer:.\n"
     "The final answer must be a concise expression (usually a single number)."
 )
-'''
-
-SYSTEM_PROMPT = "You are a careful mathematical problem solver."
-
 
 # ========= Model & Tokenizer =========
 model, tokenizer = FastLanguageModel.from_pretrained(
@@ -134,7 +130,7 @@ def format_math_examples(examples):
     for prompt, solution in zip(examples["question"], examples["answer"]):
         question = str(prompt).strip()
         text = str(solution)
-
+        '''
         match = reasoning_pattern.search(text)
         if match:
             thought = match.group(1).strip()
@@ -147,14 +143,16 @@ def format_math_examples(examples):
             f"<think>\n{thought}\n</think>\n"
             f"Final Answer: {final_answer}"
         )
-
+        '''
+        assistant_content = (text)
+        print(text)       
         # トークナイザのEOSトークンを定義（例: <|endoftext|>, </s>, <|eot_id|> など）
         eos_token = tokenizer.eos_token
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Solve the following problem step by step.\nProblem:\n{question}\nOutput the answer in the format: Final Answer: <number>"},
-            {"role": "assistant", "content": assistant_content + eos_token},
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": assistant_content},
         ]
 
         formatted_text = tokenizer.apply_chat_template(

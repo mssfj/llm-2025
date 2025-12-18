@@ -38,6 +38,14 @@ WANDB_RUNNAME_BASE = "qwen3-4b-base"
 DEFAULT_SFT_LORA_DIRNAME = "qwen3_sft_lora_openmathinst2-structured_1000"
 DEFAULT_OUTPUT_DIR = "/workspace/outputs"
 
+SYSTEM_PROMPT = (
+    "You are given a math problem.\n"
+    "First, think about the problem step by step and show your reasoning.\n"
+    "Wrap all your reasoning between <think> and </think>.\n"
+    "Then, output the final answer after Final Answer:.\n"
+    "The final answer must be a concise expression (usually a single number)."
+)
+
 MODEL_PRESETS = {
     # Base (no LoRA)
     "base": {
@@ -66,16 +74,16 @@ def extract_gsm8k_gold_answer(answer_text: str) -> str:
 def build_prompt(question: str, tokenizer) -> str:
     messages = [
         {"role": "system", "content": "You are a careful mathematical problem solver."},
-        {"role": "user", "content": f"Solve the following problem step by step.\nProblem:\n{question}\nOutput the answer in the format: Final Answer: <number>"}
+        {"role": "user", "content": f"Solve the following problem step by step.\nProblem:\n{question}\nOutput the answer in the format: Final Answer: <number>"},
     ]
-    
-	# Unsloth's optimized chat template for Qwen 2.5
+
+    # Unsloth's optimized chat template for Qwen 2.5
     tokenizer = get_chat_template(
-    	tokenizer,
-    	chat_template = "qwen-2.5",
-    	#mapping = {"role": "role", "content": "content", "user": "user", "assistant": "assistant"},
-	)
-   	# トークナイザーのテンプレートを適用
+        tokenizer,
+        chat_template = "qwen-2.5",
+        #mapping = {"role": "role", "content": "content", "user": "user", "assistant": "assistant"},
+    )
+    # トークナイザーのテンプレートを適用
     return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
 def evaluate_gsm8k_with_vllm(
@@ -116,12 +124,17 @@ def evaluate_gsm8k_with_vllm(
         max_lora_rank=32 if lora_path else 16,
     )
 
-    # ★重要: Stop Tokenの設定変更（前回の指摘事項）
+    # ★重要: Stop Tokenの設定
+    stop_ids = [tokenizer.eos_token_id]
+    im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+    if im_end_id is not None and im_end_id >= 0:
+        stop_ids.append(im_end_id)
+
     sampling_params = SamplingParams(
         temperature=0.0,
         top_p=1.0,
         max_tokens=2048,
-        stop=None, # "Final Answer:" で止まらないように削除
+        stop_token_ids=stop_ids,
     )
     
     gold_answers: List[str] = []
