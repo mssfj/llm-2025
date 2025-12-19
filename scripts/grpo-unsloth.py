@@ -15,6 +15,9 @@ SEED = 3407
 # MODEL_NAME = "unsloth/Qwen3-4B-Base"
 MODEL_NAME = "/workspace/model/qwen3_sft_lora_openmathinst2-structured_1000"
 
+MODEL_DIR = "/workspace/model/qwen3_4b_grpo_saved_lora"
+OUTPUT_DIR = "/workspace/output/"
+
 # 思考プロセス用のタグ定義
 XML_TAGS = {
     "reasoning_start": "reason",
@@ -302,7 +305,7 @@ print(f"Dataset prepared. Max input length: {input_max_len}")
 
 # --- 5. Training ---
 training_args = GRPOConfig(
-    output_dir="../outputs",
+    output_dir=f"{OUTPUT_DIR}",
     learning_rate=1e-5,
     weight_decay=0.001,
     warmup_ratio=0.1,
@@ -314,7 +317,7 @@ training_args = GRPOConfig(
     num_generations=4, # メモリ不足なら減らす
     max_prompt_length=input_max_len + 1,
     max_completion_length=MAX_SEQ_LENGTH - (input_max_len + 1),
-    max_steps=100, # テスト用に短く設定されています
+    max_steps=10, # テスト用に短く設定されています
     save_steps=100,
     report_to="none",
     vllm_gpu_memory_utilization=0.4, # VLLM用のメモリ確保
@@ -336,5 +339,5 @@ print("Starting training...")
 trainer.train()
 
 # --- 6. Save ---
-model.save_lora("/workspace/model/grpo_saved_lora")
-print("Model saved to /workspace/model/grpo_saved_lora.")
+model.save_lora(f"{MODEL_DIR}")
+print(f"Model saved to {MODEL_DIR}")
