@@ -13,47 +13,12 @@ MAX_SEQ_LENGTH = 2048
 LORA_RANK = 32
 SEED = 3407
 # MODEL_NAME = "unsloth/Qwen3-4B-Base"
-MODEL_NAME = "/workspace/model/qwen3_4b_dapo_sft_lora"
-
-print("--- Unsloth読み込みエラー回避のためのトークナイザー事前修正を開始 ---")
-
-# 1. 標準ライブラリでトークナイザーだけ読み込む
-tokenizer_temp = AutoTokenizer.from_pretrained(MODEL_NAME)
-
-# 2. あなたが使いたいテンプレートをここで定義
-# (Unslothのチェックを通過させるため、add_generation_promptが含まれている必要があります)
-correct_chat_template = \
-    "{% if messages[0]['role'] == 'system' %}"\
-        "{{ messages[0]['content'] + eos_token }}"\
-        "{% set loop_messages = messages[1:] %}"\
-    "{% else %}"\
-        "{{ '{system_prompt}' + eos_token }}"\
-        "{% set loop_messages = messages %}"\
-    "{% endif %}"\
-    "{% for message in loop_messages %}"\
-        "{% if message['role'] == 'user' %}"\
-            "{{ message['content'] }}"\
-        "{% elif message['role'] == 'assistant' %}"\
-            "{{ message['content'] + eos_token }}"\
-        "{% endif %}"\
-    "{% endfor %}"\
-    "{% if add_generation_prompt %}{{ '{reasoning_start}' }}"\
-    "{% endif %}"
-
-# 3. テンプレートを適用
-# Unslothがチェックするのは主に "add_generation_prompt" という文字列が含まれているかどうかです
-tokenizer_temp.chat_template = correct_chat_template
-
-# 4. 設定をディスクに上書き保存
-# これにより tokenizer_config.json が更新され、Unslothがエラーを吐かなくなります
-tokenizer_temp.save_pretrained(MODEL_NAME)
-
-print("--- トークナイザー修正完了。Unslothのロードを開始します ---")
+MODEL_NAME = "/workspace/model/qwen3_sft_lora_openmathinst2-structured_1000"
 
 # 思考プロセス用のタグ定義
 XML_TAGS = {
-    "reasoning_start": "<start_working_out>",
-    "reasoning_end": "<end_working_out>",
+    "reasoning_start": "reason",
+    "reasoning_end": "Final Answer: ",
     "solution_start": "<SOLUTION>",
     "solution_end": "</SOLUTION>"
 }
@@ -61,7 +26,7 @@ XML_TAGS = {
 SYSTEM_PROMPT = f"""You are given a problem.
 Think about the problem and provide your working out.
 Place it between {XML_TAGS['reasoning_start']} and {XML_TAGS['reasoning_end']}.
-Then, provide your solution between {XML_TAGS['solution_start']}{XML_TAGS['solution_end']}"""
+"""
 
 # --- 2. Model & Tokenizer Setup ---
 model, tokenizer = FastLanguageModel.from_pretrained(
@@ -112,14 +77,6 @@ print("Custom chat_template set.")
 
 # --- 3. Reward Functions ---
 # 正規表現のコンパイル（高速化のため外出し）
-solution_pattern = re.compile(
-    rf"{XML_TAGS['reasoning_end']}.*?{XML_TAGS['solution_start']}(.+?)(?:{XML_TAGS['solution_end']}|{re.escape(tokenizer.eos_token)})?[\s]*$",
-    flags=re.MULTILINE | re.DOTALL
-)
-number_pattern = re.compile(
-    XML_TAGS['solution_start'] + r".*?[\s]{0,}([-]?[\d\.\,]{1,})",
-    flags=re.MULTILINE | re.DOTALL
-)
 _reasoning_pattern = re.compile(
     rf"{XML_TAGS['reasoning_start']}(.*?){XML_TAGS['reasoning_end']}",
     flags=re.DOTALL
@@ -139,23 +96,6 @@ def _extract_completion_text(completion_obj):
     if isinstance(completion_obj, dict) and "content" in completion_obj:
         return completion_obj["content"]
     return str(completion_obj)
-
-def match_format_exactly(completions, **kwargs):
-    """フォーマットが完全に一致しているか（プロセス reward その1）"""
-    texts = [_extract_completion_text(c) for c in completions]
-    return [3.0 if solution_pattern.search(t) else 0.0 for t in texts]
-
-def match_format_approximately(completions, **kwargs):
-    """タグが含まれているか（プロセス reward その2・ラフなフォーマット）"""
-    texts = [_extract_completion_text(c) for c in completions]
-    scores = []
-    for text in texts:
-        score = 0.0
-        score += 0.5 if text.count(XML_TAGS['reasoning_end']) == 1 else -1.0
-        score += 0.5 if text.count(XML_TAGS['solution_start']) == 1 else -1.0
-        score += 0.5 if text.count(XML_TAGS['solution_end']) == 1 else -1.0
-        scores.append(score)
-    return scores
 
 # 必要なら既存のものを置き換え／統一する
 _reasoning_pattern = re.compile(
@@ -201,54 +141,33 @@ def _normalize_math_expr(s: str) -> str:
 def _extract_sections(text: str):
     """
     completion から
-    - reasoning 部分
     - solution 部分
-    - SOLUTION の前後にどれだけ余計なテキストがあるか
-    - タグ構造のエラー数
+    - SOLUTION の後ろにどれだけ余計なテキストがあるか
     を抽出するユーティリティ。
     """
-    reasoning = None
     solution = None
-    tag_errors = 0
-
-    # reasoning 抽出
-    m_r = _reasoning_pattern.search(text)
-    if m_r:
-        reasoning = m_r.group(1)
-    else:
-        tag_errors += 1  # reasoning タグ欠落
 
     # solution 抽出
     m_s = _solution_pattern.search(text)
     if m_s:
         solution = m_s.group(1)
-    else:
-        tag_errors += 1  # solution タグ欠落
 
-    # solution タグの多重出現チェック
-    all_sol = list(_solution_pattern.finditer(text))
-    if len(all_sol) > 1:
-        tag_errors += (len(all_sol) - 1)
-
-    # prefix/suffix 長さ
-    prefix_len = suffix_len = 0
+    # suffix 長さ
     if m_s:
-        start, end = m_s.span()
-        prefix_len = len(text[:start])
+        _, end = m_s.span()
         suffix_len = len(text[end:])
     else:
         # SOLUTION が無い場合は suffix を全文として扱う
         suffix_len = len(text)
 
-    return reasoning, solution, prefix_len, suffix_len, tag_errors
+    return solution, suffix_len
 
 
 def reward_math_verify_improved(completions, answer=None, **kwargs):
     """
-    math-verify correctness + format + hallucination をまとめた reward。
+    math-verify correctness + hallucination をまとめた reward。
 
     - correctness: math-verify + フォールバック一致
-    - format: タグの欠落・多重出現にペナルティ
     - hallucination: </SOLUTION> 以降の余計なテキストにペナルティ
     """
     if answer is None:
@@ -258,7 +177,6 @@ def reward_math_verify_improved(completions, answer=None, **kwargs):
     R_CORRECT = 5.0
     R_INCORRECT = -2.0
 
-    FORMAT_PENALTY_PER_ERROR = -0.5   # タグ1個おかしいごとに -0.5
     HALLUC_PENALTY_SCALE = -0.1       # suffix_len / 100 * 係数
 
     rewards = []
@@ -266,7 +184,7 @@ def reward_math_verify_improved(completions, answer=None, **kwargs):
     for comp, truth in zip(completions, answer):
         text = _extract_completion_text(comp)
 
-        reasoning, solution, prefix_len, suffix_len, tag_errors = _extract_sections(text)
+        solution, suffix_len = _extract_sections(text)
 
         # ===== 1. correctness =====
         is_correct = False
@@ -297,14 +215,7 @@ def reward_math_verify_improved(completions, answer=None, **kwargs):
 
         correctness_reward = R_CORRECT if is_correct else R_INCORRECT
 
-        # ===== 2. format penalty (タグ構造) =====
-        format_reward = FORMAT_PENALTY_PER_ERROR * float(tag_errors)
-
-        # reasoning / solution がそもそも無い場合は追加で軽く削る
-        if reasoning is None or solution is None:
-            format_reward += -0.5
-
-        # ===== 3. hallucination penalty (SOLUTION 後の余計な出力) =====
+        # ===== 2. hallucination penalty (SOLUTION 後の余計な出力) =====
         # suffix_len を 100 文字単位でスケーリングしてペナルティ
         #   例: suffix_len = 250, HALLUC_PENALTY_SCALE = -0.1
         #        → -0.1 * (250/100) = -0.25
@@ -312,7 +223,7 @@ def reward_math_verify_improved(completions, answer=None, **kwargs):
         if suffix_len > 0:
             halluc_penalty = HALLUC_PENALTY_SCALE * (suffix_len / 100.0)
 
-        total_reward = correctness_reward + format_reward + halluc_penalty
+        total_reward = correctness_reward + halluc_penalty
         rewards.append(total_reward)
 
     return rewards
@@ -370,13 +281,6 @@ def prepare_dataset():
         ],
         "answer": x["solution"], # 必要に応じてハッシュ処理などを戻す
     })
-    
-    # 長すぎるデータをフィルタリング（90パーセンタイルでカット）
-    tokenized_lengths = [len(tokenizer.apply_chat_template(p, add_generation_prompt=True)) for p in ds["prompt"]]
-    max_len_cutoff = int(np.quantile(tokenized_lengths, 0.9))
-    ds = ds.select([i for i, l in enumerate(tokenized_lengths) if l <= max_len_cutoff])
-    
-    return ds, max_len_cutoff
 
 dataset, input_max_len = prepare_dataset()
 print(f"Dataset prepared. Max input length: {input_max_len}")
@@ -408,7 +312,7 @@ training_args = GRPOConfig(
 trainer = GRPOTrainer(
     model=model,
     processing_class=tokenizer,
-    reward_funcs=[match_format_exactly, match_format_approximately, reward_math_verify_improved, reward_reasoning_length],    
+    reward_funcs=[reward_math_verify_improved, reward_reasoning_length],
 	args=training_args,
     train_dataset=dataset,
 )
