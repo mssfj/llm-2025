@@ -12,3 +12,4 @@ scripts/unsloth_compiled_cache
 scripts/=2.19
 dataset
 out.jsonl
+grpo_trainer_lora_model
