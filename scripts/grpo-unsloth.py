@@ -2,6 +2,7 @@ import re
 import torch
 import numpy as np
 from unsloth import FastLanguageModel
+from unsloth.chat_templates import get_chat_template
 from datasets import load_dataset, Dataset
 from trl import GRPOConfig, GRPOTrainer
 from vllm import SamplingParams
@@ -50,7 +51,7 @@ model = FastLanguageModel.get_peft_model(
     use_gradient_checkpointing = "unsloth",
     random_state = SEED,
 )
-
+'''
 # 1. まず文字列としてテンプレートを定義（改行バックスラッシュではなく、カッコで囲む方式に変更してミスを防ぎます）
 chat_template = \
     "{% if messages[0]['role'] == 'system' %}"\
@@ -77,6 +78,16 @@ chat_template = chat_template\
 tokenizer.chat_template = chat_template
 
 print("Custom chat_template set.")
+'''
+
+
+#Unsloth's optimized chat template for Qwen 2.5
+tokenizer = get_chat_template(
+    tokenizer,
+    chat_template = "qwen-2.5",
+    #mapping = {"role": "role", "content": "content", "user": "user", "assistant": "assistant"},
+)
+
 
 # --- 3. Reward Functions ---
 # 正規表現のコンパイル（高速化のため外出し）
