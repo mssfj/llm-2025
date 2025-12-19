@@ -33,9 +33,11 @@ Think about the problem and provide your working out.
 Place it between {XML_TAGS['reasoning_start']} and {XML_TAGS['reasoning_end']}.
 """
 
+model_name = LORA_DIR if LORA_DIR else MODEL_NAME
+
 # --- 2. Model & Tokenizer Setup ---
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name = MODEL_NAME,
+    model_name = model_name,
     max_seq_length = MAX_SEQ_LENGTH,
     load_in_4bit = True,
     fast_inference = True,
@@ -44,14 +46,17 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     fix_tokenizer = False,
 )
 
-model = FastLanguageModel.get_peft_model(
-    model,
-    r = LORA_RANK,
-    target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-    lora_alpha = LORA_RANK * 2,
-    use_gradient_checkpointing = "unsloth",
-    random_state = SEED,
-)
+if LORA_DIR:
+    print(f"Loading SFT LoRA adapter with Unsloth from: {LORA_DIR}")
+else:
+    model = FastLanguageModel.get_peft_model(
+        model,
+        r = LORA_RANK,
+        target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        lora_alpha = LORA_RANK * 2,
+        use_gradient_checkpointing = "unsloth",
+        random_state = SEED,
+    )
 
 #Unsloth's optimized chat template for Qwen 2.5
 tokenizer = get_chat_template(
