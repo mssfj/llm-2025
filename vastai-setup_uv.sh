@@ -70,12 +70,13 @@ sft = [
 grpo = [
     "transformers==4.56.2",
     "trl==0.22.2",
-    "vllm==0.10.2",
+    "vllm",
     "math-verify[antlr4_13_2]",
 ]
 
 # 評価系（math-verify 等）
 eval = [
+    "vllm==0.10.2"
 ]
 
 # 開発用

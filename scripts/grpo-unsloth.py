@@ -28,10 +28,13 @@ XML_TAGS = {
     "solution_end": "</SOLUTION>"
 }
 
-SYSTEM_PROMPT = f"""You are given a problem.
-Think about the problem and provide your working out.
-Place it between {XML_TAGS['reasoning_start']} and {XML_TAGS['reasoning_end']}.
-"""
+SYSTEM_PROMPT = (
+	"You are given a math problem.\n"
+    "First, think about the problem step by step and show your reasoning.\n"
+    "Wrap all your reasoning between <think> and </think>.\n"
+    "Then, output the final answer after Final Answer:.\n"
+    "The final answer must be a concise expression (usually a single number)."
+)
 
 model_name = LORA_DIR if LORA_DIR else MODEL_NAME
 
