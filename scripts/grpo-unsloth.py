@@ -13,8 +13,9 @@ from transformers import AutoTokenizer
 MAX_SEQ_LENGTH = 2048
 LORA_RANK = 32
 SEED = 3407
-# MODEL_NAME = "unsloth/Qwen3-4B-Base"
-MODEL_NAME = "/workspace/model/qwen3_sft_lora_openmathinst2-structured_1000"
+MODEL_NAME = "unsloth/Qwen3-4B-Base"
+LORA_DIR = "/workspace/model/qwen3_sft_lora_openmathinst2-structured_1000"
+VLLM_GPU_MEMORY_UTILIZATION = 0.6
 
 MODEL_DIR = "/workspace/model/qwen3_4b_grpo_saved_lora"
 OUTPUT_DIR = "/workspace/output/"
@@ -39,7 +40,7 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     load_in_4bit = True,
     fast_inference = True,
     max_lora_rank = LORA_RANK,
-    gpu_memory_utilization = 0.3,
+    gpu_memory_utilization = VLLM_GPU_MEMORY_UTILIZATION,
     fix_tokenizer = False,
 )
 
@@ -51,35 +52,6 @@ model = FastLanguageModel.get_peft_model(
     use_gradient_checkpointing = "unsloth",
     random_state = SEED,
 )
-'''
-# 1. まず文字列としてテンプレートを定義（改行バックスラッシュではなく、カッコで囲む方式に変更してミスを防ぎます）
-chat_template = \
-    "{% if messages[0]['role'] == 'system' %}"\
-        "{{ messages[0]['content'] + eos_token }}"\
-        "{% set loop_messages = messages[1:] %}"\
-    "{% else %}"\
-        "{{ '{system_prompt}' + eos_token }}"\
-        "{% set loop_messages = messages %}"\
-    "{% endif %}"\
-    "{% for message in loop_messages %}"\
-        "{% if message['role'] == 'user' %}"\
-            "{{ message['content'] }}"\
-        "{% elif message['role'] == 'assistant' %}"\
-            "{{ message['content'] + eos_token }}"\
-        "{% endif %}"\
-    "{% endfor %}"\
-    "{% if add_generation_prompt %}{{ '{reasoning_start}' }}"\
-    "{% endif %}"
-
-# Replace with out specific template:
-chat_template = chat_template\
-    .replace("'{system_prompt}'",   f"'{SYSTEM_PROMPT}'")\
-    .replace("'{reasoning_start}'", f"'{XML_TAGS['reasoning_start']}'")
-tokenizer.chat_template = chat_template
-
-print("Custom chat_template set.")
-'''
-
 
 #Unsloth's optimized chat template for Qwen 2.5
 tokenizer = get_chat_template(
@@ -87,7 +59,6 @@ tokenizer = get_chat_template(
     chat_template = "qwen-2.5",
     #mapping = {"role": "role", "content": "content", "user": "user", "assistant": "assistant"},
 )
-
 
 # --- 3. Reward Functions ---
 # 正規表現のコンパイル（高速化のため外出し）
@@ -331,7 +302,7 @@ training_args = GRPOConfig(
     max_steps=10, # テスト用に短く設定されています
     save_steps=100,
     report_to="none",
-    vllm_gpu_memory_utilization=0.4, # VLLM用のメモリ確保
+    vllm_gpu_memory_utilization=VLLM_GPU_MEMORY_UTILIZATION, # VLLM用のメモリ確保
     vllm_sampling_params=SamplingParams(
         min_p=0.1, top_p=1.0, top_k=-1, seed=SEED,
         stop=[tokenizer.eos_token], include_stop_str_in_output=True
