@@ -282,6 +282,21 @@ def prepare_dataset():
         "answer": x["solution"], # 必要に応じてハッシュ処理などを戻す
     })
 
+    def _prompt_len(ex):
+        text = tokenizer.apply_chat_template(
+            ex["prompt"],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        return {
+            "prompt_len": len(tokenizer(text, add_special_tokens=False).input_ids)
+        }
+
+    ds = ds.map(_prompt_len)
+    input_max_len = int(max(ds["prompt_len"])) if len(ds) > 0 else 0
+
+    return ds, input_max_len
+
 dataset, input_max_len = prepare_dataset()
 print(f"Dataset prepared. Max input length: {input_max_len}")
 
