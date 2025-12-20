@@ -211,7 +211,7 @@ def reward_tag_token_length(completions, **kwargs):
     bounds = {
         "analyze": (64, 256),
         "plan": (48, 500),
-        "verify": (32, 160),
+        "verify": (32, 460),
         "reason": (160, 568),
     }
     for tag in bounds:
@@ -250,9 +250,11 @@ def reward_tag_token_length(completions, **kwargs):
 def reward_required_tags_once(completions, **kwargs):
     """
     必須タグと Final Answer がそれぞれ 1 回ずつ含まれる場合のみ報酬。
+    欠落があればペナルティ。
     """
     rewards = []
     r_format = float(kwargs.pop("_format_reward", 1.0)) if "_format_reward" in kwargs else 1.0
+    r_penalty = float(kwargs.pop("_format_penalty", -1.0)) if "_format_penalty" in kwargs else -1.0
     required_tags = ["analyze", "plan", "verify", "reason"]
 
     for comp in completions:
@@ -262,7 +264,7 @@ def reward_required_tags_once(completions, **kwargs):
             for tag in required_tags
         )
         has_final_once = text.count("Final Answer: ") == 1
-        rewards.append(r_format if (has_all_once and has_final_once) else 0.0)
+        rewards.append(r_format if (has_all_once and has_final_once) else r_penalty)
 
     return rewards
 
@@ -323,7 +325,7 @@ training_args = GRPOConfig(
     logging_steps=1,
     per_device_train_batch_size=1,
     gradient_accumulation_steps=1, 
-    num_generations=2, # メモリ不足なら減らす
+    num_generations=3, # メモリ不足なら減らす
     max_prompt_length=max_prompt_length,
     max_completion_length=max_completion_length,
     max_steps=5, # テスト用に短く設定されています
