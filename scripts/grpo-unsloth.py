@@ -147,9 +147,13 @@ def _extract_completion_text(completion_obj):
         return completion_obj["content"]
     return str(completion_obj)
 
-_reasoning_pattern = re.compile(
-    r"<think>(.*?)</think>", re.DOTALL | re.IGNORECASE
-)
+_tag_patterns = {
+    tag: re.compile(rf"<{tag}>(.*?)</{tag}>", re.DOTALL | re.IGNORECASE)
+    for tag in ("analyze", "plan", "verify", "reason")
+}
+
+def _token_len(text):
+    return len(tokenizer(text, add_special_tokens=False).input_ids)
 
 _math_verify_config = MathVerifyConfig(require_final_answer=True)
 
@@ -188,41 +192,55 @@ def reward_math_verify(completions, answer=None, **kwargs):
     return rewards
 
 
-def reward_reasoning_length(completions, **kwargs):
+def reward_tag_token_length(completions, **kwargs):
     """
-    reasoning（<think> ... </think>）の長さを
-    [L_min, L_max] に収めることを狙う長さペナルティ。
+    <analyze>, <plan>, <verify>, <reason> 内のトークン長ペナルティ。
 
-    - L < L_min  → 短すぎペナルティ
-    - L > L_max  → 長すぎペナルティ
-    - L_min <= L <= L_max → ペナルティ 0
+    - L < L_min  -> 短すぎペナルティ
+    - L > L_max  -> 長すぎペナルティ
+    - L_min <= L <= L_max -> ペナルティ 0
     """
     rewards = []
 
-    alpha = float(kwargs.pop("_alpha", 0.1)) if "_alpha" in kwargs else 0.1
-    L_min = int(kwargs.pop("_L_min", 300)) if "_L_min" in kwargs else 300
-    L_max = int(kwargs.pop("_L_max", 900)) if "_L_max" in kwargs else 900
+    alpha = float(kwargs.pop("_tag_alpha", 0.1)) if "_tag_alpha" in kwargs else 0.1
+    missing_penalty = float(kwargs.pop("_missing_penalty", 0.2)) if "_missing_penalty" in kwargs else 0.2
+    scale = float(kwargs.pop("_len_scale", 50.0)) if "_len_scale" in kwargs else 50.0
+    if scale <= 0:
+        scale = 50.0
+
+    bounds = {
+        "analyze": (64, 256),
+        "plan": (48, 500),
+        "verify": (32, 160),
+        "reason": (160, 568),
+    }
+    for tag in bounds:
+        min_key = f"_{tag}_min"
+        max_key = f"_{tag}_max"
+        if min_key in kwargs:
+            bounds[tag] = (int(kwargs.pop(min_key)), bounds[tag][1])
+        if max_key in kwargs:
+            bounds[tag] = (bounds[tag][0], int(kwargs.pop(max_key)))
 
     for comp in completions:
         text = _extract_completion_text(comp)
+        penalty = 0.0
 
-        m = _reasoning_pattern.search(text)
-        if not m:
-            # reasoning タグが欠落 → 一律軽ペナルティ
-            rewards.append(-1.0 * alpha)
-            continue
+        for tag, (L_min, L_max) in bounds.items():
+            m = _tag_patterns[tag].search(text)
+            if not m:
+                penalty -= missing_penalty
+                continue
 
-        reasoning_text = m.group(1)
-        L = len(reasoning_text)
+            tag_text = m.group(1).strip()
+            L = _token_len(tag_text)
 
-        if L < L_min:
-            diff = L_min - L
-            penalty = -alpha * (diff / 100.0)
-        elif L > L_max:
-            diff = L - L_max
-            penalty = -alpha * (diff / 100.0)
-        else:
-            penalty = 0.0
+            if L < L_min:
+                diff = L_min - L
+                penalty -= alpha * (diff / scale)
+            elif L > L_max:
+                diff = L - L_max
+                penalty -= alpha * (diff / scale)
 
         rewards.append(penalty)
 
@@ -322,7 +340,7 @@ training_args = GRPOConfig(
 trainer = GRPOTrainer(
     model=model,
     processing_class=tokenizer,
-    reward_funcs=[reward_math_verify, reward_reasoning_length, reward_required_tags_once],
+    reward_funcs=[reward_math_verify, reward_tag_token_length, reward_required_tags_once],
 	args=training_args,
     train_dataset=dataset,
 )
