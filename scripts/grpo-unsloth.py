@@ -228,6 +228,26 @@ def reward_reasoning_length(completions, **kwargs):
 
     return rewards
 
+
+def reward_required_tags_once(completions, **kwargs):
+    """
+    必須タグと Final Answer がそれぞれ 1 回ずつ含まれる場合のみ報酬。
+    """
+    rewards = []
+    r_format = float(kwargs.pop("_format_reward", 1.0)) if "_format_reward" in kwargs else 1.0
+    required_tags = ["analyze", "plan", "verify", "reason"]
+
+    for comp in completions:
+        text = _extract_completion_text(comp)
+        has_all_once = all(
+            text.count(f"<{tag}>") == 1 and text.count(f"</{tag}>") == 1
+            for tag in required_tags
+        )
+        has_final_once = text.count("Final Answer: ") == 1
+        rewards.append(r_format if (has_all_once and has_final_once) else 0.0)
+
+    return rewards
+
 # --- 4. Data Preparation ---
 def prepare_dataset():
     ds = load_dataset("open-r1/DAPO-Math-17k-Processed", "en", split="train")
@@ -302,7 +322,7 @@ training_args = GRPOConfig(
 trainer = GRPOTrainer(
     model=model,
     processing_class=tokenizer,
-    reward_funcs=[reward_math_verify, reward_reasoning_length],
+    reward_funcs=[reward_math_verify, reward_reasoning_length, reward_required_tags_once],
 	args=training_args,
     train_dataset=dataset,
 )
