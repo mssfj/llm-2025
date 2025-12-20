@@ -6,11 +6,12 @@ from unsloth.chat_templates import get_chat_template
 from datasets import load_dataset, Dataset
 from trl import GRPOConfig, GRPOTrainer
 from vllm import SamplingParams
-from math_verify import parse, verify
+from mymath_verify import verify_math_answer, MathVerifyConfig, extract_final_answer
 from transformers import AutoTokenizer
 
 # --- 1. Configuration ---
-MAX_SEQ_LENGTH = 2048
+MAX_SEQ_LENGTH = 3500
+MIN_COMPLETION_LENGTH = 512
 LORA_RANK = 32
 SEED = 3407
 MODEL_NAME = "unsloth/Qwen3-4B-Base"
@@ -20,21 +21,70 @@ VLLM_GPU_MEMORY_UTILIZATION = 0.6
 MODEL_DIR = "/workspace/model/qwen3_4b_grpo_saved_lora"
 OUTPUT_DIR = "/workspace/output/"
 
-# 思考プロセス用のタグ定義
-XML_TAGS = {
-    "reasoning_start": "reason",
-    "reasoning_end": "Final Answer: ",
-    "solution_start": "<SOLUTION>",
-    "solution_end": "</SOLUTION>"
-}
+SYSTEM_PROMPT = ("""
+You are a careful mathematical problem solver.
+You MUST follow the required output format exactly.
 
-SYSTEM_PROMPT = (
-	"You are given a math problem.\n"
-    "First, think about the problem step by step and show your reasoning.\n"
-    "Wrap all your reasoning between <think> and </think>.\n"
-    "Then, output the final answer after Final Answer:.\n"
-    "The final answer must be a concise expression (usually a single number)."
-)
+Required output format (MUST follow exactly):
+<think>
+<analyze>...</analyze>
+<plan>...</plan>
+<verify>...</verify>
+<reason>...</reason>
+</think>
+Final Answer: <number>
+
+Rules:
+- The output MUST start with <think> and end with the Final Answer line.
+- Do not omit <think> or any of the tags.
+- Do not output any extra tags like <Final Answer>.
+- Put only the final numeric answer after 'Final Answer: '.
+
+In <analyze>, restate the problem in your own words and identify:
+- the given quantities,
+- what is being asked,
+- any constraints or implicit assumptions.
+
+Do NOT perform calculations.
+Do NOT outline solution steps.
+Focus only on understanding and formalizing the problem.
+
+In <plan>, describe the logical steps required to solve the problem.
+
+- Write the steps at a high level.
+- Do NOT carry out arithmetic or algebra.
+- Do NOT include intermediate or final results.
+- Each step should describe *what* will be done, not *the result*.
+
+The plan must be sufficient for another solver to reproduce the solution.
+
+In <verify>, explain why the planned solution is valid.
+
+- Check that all given information is used exactly once.
+- Confirm that no assumptions contradict the problem.
+- Explain why the method guarantees a unique correct answer.
+
+Do NOT redo the calculation.
+Do NOT introduce new steps.
+
+In <reason>, carry out the full logical reasoning and calculations.
+
+- Follow the steps described in <plan>.
+- Show intermediate calculations clearly.
+- Keep the reasoning concise and linear.
+- Do not add commentary unrelated to solving the problem.
+
+Do NOT include the final answer statement here.
+
+After </reason>, output exactly one line:
+
+Final Answer: <number>
+
+- No extra text.
+- No units unless explicitly required.
+- Use plain numerals.
+
+""")
 
 model_name = LORA_DIR if LORA_DIR else MODEL_NAME
 
@@ -68,13 +118,20 @@ tokenizer = get_chat_template(
     #mapping = {"role": "role", "content": "content", "user": "user", "assistant": "assistant"},
 )
 
-# --- 3. Reward Functions ---
-# 正規表現のコンパイル（高速化のため外出し）
-_reasoning_pattern = re.compile(
-    rf"{XML_TAGS['reasoning_start']}(.*?){XML_TAGS['reasoning_end']}",
-    flags=re.DOTALL
-)
+stop_token_ids = []
+if tokenizer.eos_token_id is not None:
+    stop_token_ids.append(tokenizer.eos_token_id)
+im_end_token = "<|im_end|>"
+if hasattr(tokenizer, "get_vocab") and im_end_token in tokenizer.get_vocab():
+    im_end_id = tokenizer.convert_tokens_to_ids(im_end_token)
+else:
+    im_end_id = tokenizer.convert_tokens_to_ids(im_end_token)
+    if tokenizer.convert_ids_to_tokens(im_end_id) != im_end_token:
+        im_end_id = None
+if im_end_id is not None and im_end_id not in stop_token_ids:
+    stop_token_ids.append(im_end_id)
 
+# --- 3. Reward Functions ---
 def _extract_completion_text(completion_obj):
     """
     vLLM + TRL の completions からプレーンテキストを取り出すヘルパー。
@@ -90,78 +147,17 @@ def _extract_completion_text(completion_obj):
         return completion_obj["content"]
     return str(completion_obj)
 
-# 必要なら既存のものを置き換え／統一する
 _reasoning_pattern = re.compile(
-    r"<start_working_out>(.*?)<end_working_out>", re.DOTALL | re.IGNORECASE
-)
-_solution_pattern = re.compile(
-    r"<SOLUTION>(.*?)</SOLUTION>", re.DOTALL | re.IGNORECASE
+    r"<think>(.*?)</think>", re.DOTALL | re.IGNORECASE
 )
 
-def _normalize_math_expr(s: str) -> str:
+_math_verify_config = MathVerifyConfig(require_final_answer=True)
+
+def reward_math_verify(completions, answer=None, **kwargs):
     """
-    LaTeX ラッパを剥がし、前後のノイズを削る軽量正規化。
-    math-verify に渡す前/フォールバック比較前に必ず通す。
-    """
-    if s is None:
-        return ""
-
-    s = str(s).strip()
-
-    # よくある LaTeX ラッパを剥がす
-    wrappers = [
-        ("$$", "$$"),
-        ("$", "$"),
-        (r"\(", r"\)"),
-        (r"\[", r"\]"),
-        (r"\boxed{", "}"),
-    ]
-    changed = True
-    # ネストにある程度耐えるため、剥がせる限りループ
-    while changed:
-        changed = False
-        for left, right in wrappers:
-            if s.startswith(left) and s.endswith(right) and len(s) > len(left) + len(right):
-                s = s[len(left) : -len(right)].strip()
-                changed = True
-
-    # カンマなど軽い前処理
-    s = s.replace("，", ",").strip()
-
-    return s
-
-
-def _extract_sections(text: str):
-    """
-    completion から
-    - solution 部分
-    - SOLUTION の後ろにどれだけ余計なテキストがあるか
-    を抽出するユーティリティ。
-    """
-    solution = None
-
-    # solution 抽出
-    m_s = _solution_pattern.search(text)
-    if m_s:
-        solution = m_s.group(1)
-
-    # suffix 長さ
-    if m_s:
-        _, end = m_s.span()
-        suffix_len = len(text[end:])
-    else:
-        # SOLUTION が無い場合は suffix を全文として扱う
-        suffix_len = len(text)
-
-    return solution, suffix_len
-
-
-def reward_math_verify_improved(completions, answer=None, **kwargs):
-    """
-    math-verify correctness + hallucination をまとめた reward。
+    math-verify correctness reward。
 
     - correctness: math-verify + フォールバック一致
-    - hallucination: </SOLUTION> 以降の余計なテキストにペナルティ
     """
     if answer is None:
         return [0.0] * len(completions)
@@ -170,61 +166,31 @@ def reward_math_verify_improved(completions, answer=None, **kwargs):
     R_CORRECT = 5.0
     R_INCORRECT = -2.0
 
-    HALLUC_PENALTY_SCALE = -0.1       # suffix_len / 100 * 係数
-
     rewards = []
 
     for comp, truth in zip(completions, answer):
         text = _extract_completion_text(comp)
 
-        solution, suffix_len = _extract_sections(text)
-
         # ===== 1. correctness =====
         is_correct = False
 
-        # gold / pred を正規化してから math-verify に渡す
-        gold_str = _normalize_math_expr(truth)
-        pred_str = _normalize_math_expr(solution if solution is not None else text)
-
-        try:
-            gold_parsed = parse(gold_str)
-            pred_parsed = parse(pred_str)
-            is_correct = bool(verify(gold_parsed, pred_parsed))
-        except Exception:
-            is_correct = False
-
-        # フォールバック: プレーンテキスト一致 / 数値一致
-        if not is_correct:
-            if pred_str.strip() == gold_str.strip():
-                is_correct = True
-            else:
-                try:
-                    g = float(gold_str.replace(",", ""))
-                    p = float(pred_str.replace(",", ""))
-                    if abs(g - p) <= 1e-6:
-                        is_correct = True
-                except Exception:
-                    pass
+        gold_answer = extract_final_answer(str(truth))
+        if not gold_answer:
+            gold_answer = str(truth)
+        result = verify_math_answer(text, gold_answer, config=_math_verify_config)
+        is_correct = result.is_correct
+        
+        print(f"TEXT:{text}\n GOLD_ANSWER:{gold_answer}\n RESULT:{result}\n IS_CORRECT:{is_correct}\n")
 
         correctness_reward = R_CORRECT if is_correct else R_INCORRECT
-
-        # ===== 2. hallucination penalty (SOLUTION 後の余計な出力) =====
-        # suffix_len を 100 文字単位でスケーリングしてペナルティ
-        #   例: suffix_len = 250, HALLUC_PENALTY_SCALE = -0.1
-        #        → -0.1 * (250/100) = -0.25
-        halluc_penalty = 0.0
-        if suffix_len > 0:
-            halluc_penalty = HALLUC_PENALTY_SCALE * (suffix_len / 100.0)
-
-        total_reward = correctness_reward + halluc_penalty
-        rewards.append(total_reward)
-
+        rewards.append(correctness_reward)
+        
     return rewards
 
 
 def reward_reasoning_length(completions, **kwargs):
     """
-    reasoning（<start_working_out> ... <end_working_out>）の長さを
+    reasoning（<think> ... </think>）の長さを
     [L_min, L_max] に収めることを狙う長さペナルティ。
 
     - L < L_min  → 短すぎペナルティ
@@ -290,8 +256,23 @@ def prepare_dataset():
 
     return ds, input_max_len
 
+def max_length_check(input_max_len):
+    max_completion_length = MAX_SEQ_LENGTH - (input_max_len + 1)
+    if max_completion_length < MIN_COMPLETION_LENGTH:
+        max_completion_length = MIN_COMPLETION_LENGTH
+    max_prompt_length = MAX_SEQ_LENGTH - max_completion_length
+    print(
+        "Using lengths -> "
+        f"max_prompt_length={max_prompt_length}, "
+        f"max_completion_length={max_completion_length}"
+    )
+    return max_prompt_length
+
 dataset, input_max_len = prepare_dataset()
 print(f"Dataset prepared. Max input length: {input_max_len}")
+
+max_prompt_length = max_length_check(input_max_len)
+max_completion_length = MAX_SEQ_LENGTH - (input_max_len + 1)
 
 # --- 5. Training ---
 training_args = GRPOConfig(
@@ -304,23 +285,24 @@ training_args = GRPOConfig(
     logging_steps=1,
     per_device_train_batch_size=1,
     gradient_accumulation_steps=1, 
-    num_generations=4, # メモリ不足なら減らす
-    max_prompt_length=input_max_len + 1,
-    max_completion_length=MAX_SEQ_LENGTH - (input_max_len + 1),
-    max_steps=10, # テスト用に短く設定されています
+    num_generations=2, # メモリ不足なら減らす
+    max_prompt_length=max_prompt_length,
+    max_completion_length=max_completion_length,
+    max_steps=5, # テスト用に短く設定されています
     save_steps=100,
     report_to="none",
     vllm_gpu_memory_utilization=VLLM_GPU_MEMORY_UTILIZATION, # VLLM用のメモリ確保
     vllm_sampling_params=SamplingParams(
         min_p=0.1, top_p=1.0, top_k=-1, seed=SEED,
-        stop=[tokenizer.eos_token], include_stop_str_in_output=True
+        max_tokens=max_completion_length,
+        stop_token_ids=stop_token_ids,
     ),
 )
 
 trainer = GRPOTrainer(
     model=model,
     processing_class=tokenizer,
-    reward_funcs=[reward_math_verify_improved, reward_reasoning_length],
+    reward_funcs=[reward_math_verify, reward_reasoning_length],
 	args=training_args,
     train_dataset=dataset,
 )
