@@ -300,7 +300,7 @@ class MathVerifyConfig:
 class MathVerifyResult:
     is_correct: bool
     reason: str
-    pred_answer: str
+    pred_answer: Optional[str]
     gold_answer: str
 
 
@@ -322,12 +322,14 @@ def verify_math_answer(
     extracted = extract_final_answer_with_meta(pred_text)
     pred_raw = extracted.answer
     pred = _normalize_text(pred_raw)
+    has_explicit_final = "Final Answer: " in pred_text
+    pred_answer = pred if has_explicit_final else None
 
-    if config.require_final_answer and not extracted.has_final_answer:
+    if config.require_final_answer and not has_explicit_final:
         return MathVerifyResult(
             is_correct=False,
             reason="missing_final_answer",
-            pred_answer=pred,
+            pred_answer=None,
             gold_answer=gold,
         )
 
@@ -336,7 +338,7 @@ def verify_math_answer(
         return MathVerifyResult(
             is_correct=True,
             reason="exact_match",
-            pred_answer=pred,
+            pred_answer=pred_answer,
             gold_answer=gold,
         )
 
@@ -349,7 +351,7 @@ def verify_math_answer(
                 return MathVerifyResult(
                     is_correct=True,
                     reason="numeric_close",
-                    pred_answer=pred,
+                    pred_answer=pred_answer,
                     gold_answer=gold,
                 )
 
@@ -359,7 +361,7 @@ def verify_math_answer(
             return MathVerifyResult(
                 is_correct=True,
                 reason="sympy_equiv",
-                pred_answer=pred,
+                pred_answer=pred_answer,
                 gold_answer=gold,
             )
 
@@ -367,7 +369,7 @@ def verify_math_answer(
     return MathVerifyResult(
         is_correct=False,
         reason="mismatch",
-        pred_answer=pred,
+        pred_answer=pred_answer,
         gold_answer=gold,
     )
 
