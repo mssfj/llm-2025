@@ -8,6 +8,7 @@ from trl import GRPOConfig, GRPOTrainer
 from vllm import SamplingParams
 from mymath_verify import verify_math_answer, MathVerifyConfig, extract_final_answer
 from transformers import AutoTokenizer
+import wandb
 
 # --- 1. Configuration ---
 MAX_SEQ_LENGTH = 3500
@@ -21,22 +22,26 @@ VLLM_GPU_MEMORY_UTILIZATION = 0.6
 MODEL_DIR = "/workspace/model/qwen3_4b_grpo_saved_lora"
 OUTPUT_DIR = "/workspace/output/"
 
+GRPO_DATASET = "open-r1/DAPO-Math-17k-Processed"
+
+WANDB_PROJECT = "qwen3-4b-grpo"
+WANDB_RUNNAME = "qwen3-4b-grpo"
+WANDB_ENTITY = "mssfj-1"
+
 SYSTEM_PROMPT = ("""
 You are a careful mathematical problem solver.
 You MUST follow the required output format exactly.
 
 Required output format (MUST follow exactly):
-<think>
 <analyze>...</analyze>
 <plan>...</plan>
 <verify>...</verify>
 <reason>...</reason>
-</think>
+
 Final Answer: <number>
 
 Rules:
-- The output MUST start with <think> and end with the Final Answer line.
-- Do not omit <think> or any of the tags.
+- Do not omit <analyze></analyze><plan></plan><verify></verify><reason></reason>.
 - Do not output any extra tags like <Final Answer>.
 - Put only the final numeric answer after 'Final Answer: '.
 
@@ -157,6 +162,34 @@ def _token_len(text):
 
 _math_verify_config = MathVerifyConfig(require_final_answer=True)
 
+def _analyze_gate_passes(text, min_len=64, min_alpha=8):
+    """
+    <analyze> が最低限の内容を持つかの簡易ゲート。
+    - 長さ不足や "..." のような埋め草を弾く
+    """
+    m = _tag_patterns["analyze"].search(text)
+    if not m:
+        return False
+    content = m.group(1).strip()
+    if not content:
+        return False
+
+    # 埋め草や記号のみを除外
+    compact = re.sub(r"\s+", "", content)
+    if compact in {"...", "..", ".", "…"}:
+        return False
+    if len(compact) <= 5 and all(ch in ".-_*~" for ch in compact):
+        return False
+
+    alpha_count = sum(ch.isalpha() for ch in content)
+    if alpha_count < min_alpha:
+        return False
+
+    if _token_len(content) < min_len:
+        return False
+
+    return True
+
 def reward_math_verify(completions, answer=None, **kwargs):
     """
     math-verify correctness reward。
@@ -169,6 +202,10 @@ def reward_math_verify(completions, answer=None, **kwargs):
     # ハイパーパラメータ（あとで調整用）
     R_CORRECT = 5.0
     R_INCORRECT = -2.0
+    analyze_gate = bool(kwargs.pop("_analyze_gate", True)) if "_analyze_gate" in kwargs else True
+    analyze_min_len = int(kwargs.pop("_analyze_min_len", 64)) if "_analyze_min_len" in kwargs else 64
+    analyze_min_alpha = int(kwargs.pop("_analyze_min_alpha", 8)) if "_analyze_min_alpha" in kwargs else 8
+    analyze_fail_penalty = float(kwargs.pop("_analyze_fail_penalty", -1.0)) if "_analyze_fail_penalty" in kwargs else -1.0
 
     rewards = []
 
@@ -186,7 +223,14 @@ def reward_math_verify(completions, answer=None, **kwargs):
         
         print(f"TEXT:{text}\n GOLD_ANSWER:{gold_answer}\n RESULT:{result}\n IS_CORRECT:{is_correct}\n")
 
-        correctness_reward = R_CORRECT if is_correct else R_INCORRECT
+        if analyze_gate and not _analyze_gate_passes(
+            text,
+            min_len=analyze_min_len,
+            min_alpha=analyze_min_alpha,
+        ):
+            correctness_reward = analyze_fail_penalty
+        else:
+            correctness_reward = R_CORRECT if is_correct else R_INCORRECT
         rewards.append(correctness_reward)
         
     return rewards
@@ -209,12 +253,15 @@ def reward_tag_token_length(completions, **kwargs):
         scale = 50.0
 
     bounds = {
-        "analyze": (64, 256),
+        "analyze": (96, 300),
         "plan": (48, 500),
-        "verify": (32, 460),
-        "reason": (160, 568),
+        "verify": (32, 250),
+        "reason": (160, 480),
     }
+    tag_alpha = {}
     for tag in bounds:
+        alpha_key = f"_{tag}_alpha"
+        tag_alpha[tag] = float(kwargs.pop(alpha_key)) if alpha_key in kwargs else alpha
         min_key = f"_{tag}_min"
         max_key = f"_{tag}_max"
         if min_key in kwargs:
@@ -237,10 +284,10 @@ def reward_tag_token_length(completions, **kwargs):
 
             if L < L_min:
                 diff = L_min - L
-                penalty -= alpha * (diff / scale)
+                penalty -= tag_alpha[tag] * (diff / scale)
             elif L > L_max:
                 diff = L - L_max
-                penalty -= alpha * (diff / scale)
+                penalty -= tag_alpha[tag] * (diff / scale)
 
         rewards.append(penalty)
 
@@ -270,7 +317,7 @@ def reward_required_tags_once(completions, **kwargs):
 
 # --- 4. Data Preparation ---
 def prepare_dataset():
-    ds = load_dataset("open-r1/DAPO-Math-17k-Processed", "en", split="train")
+    ds = load_dataset(f"{GRPO_DATASET}", "en", split="train")
     
     # プロンプト形式への変換
     ds = ds.map(lambda x: {
@@ -306,13 +353,12 @@ def max_length_check(input_max_len):
         f"max_prompt_length={max_prompt_length}, "
         f"max_completion_length={max_completion_length}"
     )
-    return max_prompt_length
+    return max_prompt_length, max_completion_length
 
 dataset, input_max_len = prepare_dataset()
 print(f"Dataset prepared. Max input length: {input_max_len}")
 
-max_prompt_length = max_length_check(input_max_len)
-max_completion_length = MAX_SEQ_LENGTH - (input_max_len + 1)
+max_prompt_length, max_completion_length = max_length_check(input_max_len)
 
 # --- 5. Training ---
 training_args = GRPOConfig(
@@ -328,9 +374,9 @@ training_args = GRPOConfig(
     num_generations=3, # メモリ不足なら減らす
     max_prompt_length=max_prompt_length,
     max_completion_length=max_completion_length,
-    max_steps=5, # テスト用に短く設定されています
+    max_steps=1000, # テスト用に短く設定されています
     save_steps=100,
-    report_to="none",
+    report_to="wandb",
     vllm_gpu_memory_utilization=VLLM_GPU_MEMORY_UTILIZATION, # VLLM用のメモリ確保
     vllm_sampling_params=SamplingParams(
         min_p=0.1, top_p=1.0, top_k=-1, seed=SEED,
@@ -338,6 +384,8 @@ training_args = GRPOConfig(
         stop_token_ids=stop_token_ids,
     ),
 )
+
+wandb.init(project=WANDB_PROJECT, entity=WANDB_ENTITY, name=WANDB_RUNNAME)
 
 trainer = GRPOTrainer(
     model=model,
