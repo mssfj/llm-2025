@@ -93,6 +93,8 @@ def _postprocess_candidate(s: str) -> str:
 
 
 _NUMERIC_TOKEN_RE = re.compile(r"[-+]?\d+(?:\.\d+)?(?:/\d+)?")
+_PLAIN_NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?(?:/\d+(?:\.\d+)?)?%?")
+_NUMBER_WITH_UNIT_RE = re.compile(r"[-+]?\d+(?:\.\d+)?(?:/\d+(?:\.\d+)?)?\s+[A-Za-z%°]+")
 
 
 def _extract_numeric_token(text: str) -> Optional[str]:
@@ -101,6 +103,34 @@ def _extract_numeric_token(text: str) -> Optional[str]:
     if m:
         return _postprocess_candidate(m.group(0))
     return None
+
+
+def _looks_like_math_expression(text: str) -> bool:
+    """Final Answer が数式っぽい場合に True を返す"""
+    s = _postprocess_candidate(text)
+    if not s:
+        return False
+    if _PLAIN_NUMBER_RE.fullmatch(s):
+        return False
+    if _NUMBER_WITH_UNIT_RE.fullmatch(s):
+        return False
+    if re.search(r"[A-Za-z\\]", s):
+        return True
+    if re.search(r"[=<>^+\-*/()\[\]{}]", s):
+        return True
+    if len(_NUMERIC_TOKEN_RE.findall(s)) >= 2:
+        return True
+    return False
+
+
+def _select_final_candidate(candidate: str) -> str:
+    candidate = _postprocess_candidate(candidate)
+    if not candidate:
+        return ""
+    if _looks_like_math_expression(candidate):
+        return candidate
+    token = _extract_numeric_token(candidate)
+    return token if token else candidate
 
 
 def extract_final_answer(raw_text: str) -> str:
@@ -125,11 +155,9 @@ def extract_final_answer_with_meta(raw_text: str) -> ExtractedAnswer:
     for pat in _FINAL_ANSWER_PATTERNS:
         m = re.search(pat, text, flags=re.IGNORECASE)
         if m:
-            candidate = m.group(1)
-            candidate = _postprocess_candidate(candidate)
+            candidate = _select_final_candidate(m.group(1))
             if candidate:
-                token = _extract_numeric_token(candidate)
-                return ExtractedAnswer(token if token else candidate, True, "pattern")
+                return ExtractedAnswer(candidate, True, "pattern")
 
     # 2) 行ごとに見て「Final Answer」「答え」などのキーワードを含む行を優先
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -139,34 +167,36 @@ def extract_final_answer_with_meta(raw_text: str) -> ExtractedAnswer:
     keyword_re = re.compile(r"(final answer|final ans|answer|最終解|最終答え|答え)", flags=re.IGNORECASE)
     for ln in reversed(lines):
         if keyword_re.search(ln):
-            token = _extract_numeric_token(ln)
-            if token:
-                return ExtractedAnswer(token, True, "keyword_line")
-            candidate = _postprocess_candidate(ln)
-            token = _extract_numeric_token(candidate)
-            return ExtractedAnswer(token if token else candidate, True, "keyword_line")
+            m = keyword_re.search(ln)
+            remainder = ln[m.end():] if m else ln
+            remainder = re.sub(
+                r"^\s*(?:[:：=]|is\b|->|⇒|=>)?\s*",
+                "",
+                remainder,
+                flags=re.IGNORECASE,
+            )
+            candidate = _select_final_candidate(remainder or ln)
+            return ExtractedAnswer(candidate, True, "keyword_line")
 
     # 3) キーワードが無ければ、最後の行の「それっぽい」トークンを拾う
     last = lines[-1]
-    token = _extract_numeric_token(last)
-    if token:
-        # 最終行が単独の数値だけなら最終回答として扱う
+    candidate = _select_final_candidate(last)
+    if candidate:
         clean_last = _normalize_text(_postprocess_candidate(last))
         bare_answer = (
             len(lines) == 1
-            or clean_last == token
+            or clean_last == candidate
             or len(clean_last.split()) <= 3  # 数字＋簡単な単位程度
         )
-        return ExtractedAnswer(token, bare_answer, "fallback")
+        return ExtractedAnswer(candidate, bare_answer, "fallback")
 
     # 何も取れなければ行全体を返す
-    candidate = _postprocess_candidate(last)
-    token = _extract_numeric_token(candidate)
-    answer = token if token else candidate
-    tokens = candidate.split()
+    candidate = _select_final_candidate(last)
+    answer = candidate
+    tokens = _postprocess_candidate(last).split()
     has_final = (
         len(lines) == 1
-        or (token is not None and len(tokens) <= 3)  # 数字＋簡単な単位程度なら最終回答扱い
+        or (answer and len(tokens) <= 3)  # 短い答えなら最終回答扱い
     )
     return ExtractedAnswer(answer, has_final, "fallback")
 

@@ -23,6 +23,7 @@ MODEL_DIR = "/workspace/model/qwen3_4b_grpo_saved_lora"
 OUTPUT_DIR = "/workspace/output/"
 
 GRPO_DATASET = "open-r1/DAPO-Math-17k-Processed"
+MAX_STEPS = 10
 
 WANDB_PROJECT = "qwen3-4b-grpo"
 WANDB_RUNNAME = "qwen3-4b-grpo"
@@ -38,12 +39,12 @@ Required output format (MUST follow exactly):
 <verify>...</verify>
 <reason>...</reason>
 
-Final Answer: <number>
+Final Answer: <answer>
 
 Rules:
 - Do not omit <analyze></analyze><plan></plan><verify></verify><reason></reason>.
 - Do not output any extra tags like <Final Answer>.
-- Put only the final numeric answer after 'Final Answer: '.
+- Put only the final answer after 'Final Answer: '.
 
 In <analyze>, restate the problem in your own words and identify:
 - the given quantities,
@@ -83,11 +84,11 @@ Do NOT include the final answer statement here.
 
 After </reason>, output exactly one line:
 
-Final Answer: <number>
+Final Answer: <answer>
 
 - No extra text.
 - No units unless explicitly required.
-- Use plain numerals.
+- Use a concise expression.
 
 """)
 
@@ -374,7 +375,7 @@ training_args = GRPOConfig(
     num_generations=3, # メモリ不足なら減らす
     max_prompt_length=max_prompt_length,
     max_completion_length=max_completion_length,
-    max_steps=1000, # テスト用に短く設定されています
+    max_steps=int(f"{MAX_STEPS}"), # テスト用に短く設定されています
     save_steps=100,
     report_to="wandb",
     vllm_gpu_memory_utilization=VLLM_GPU_MEMORY_UTILIZATION, # VLLM用のメモリ確保
