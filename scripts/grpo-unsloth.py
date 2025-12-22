@@ -1,6 +1,8 @@
+import os
 import re
 import torch
 import numpy as np
+import requests
 from unsloth import FastLanguageModel
 from unsloth.chat_templates import get_chat_template
 from datasets import load_dataset, Dataset
@@ -16,18 +18,22 @@ MIN_COMPLETION_LENGTH = 512
 LORA_RANK = 32
 SEED = 3407
 MODEL_NAME = "unsloth/Qwen3-4B-Base"
-LORA_DIR = "/workspace/model/qwen3_sft_lora_openmathinst2-structured_1000"
+#LORA_DIR = "/workspace/model/qwen3_sft_lora_openmathinst2-structured_1000"
+LORA_DIR = "/workspace/model/qwen3_4b_grpo_saved_lora"
 VLLM_GPU_MEMORY_UTILIZATION = 0.6
 
-MODEL_DIR = "/workspace/model/qwen3_4b_grpo_saved_lora"
+MODEL_DIR = "/workspace/model/qwen3_4b_grpo_saved_lora-v2"
 OUTPUT_DIR = "/workspace/output/"
 
 GRPO_DATASET = "open-r1/DAPO-Math-17k-Processed"
-MAX_STEPS = 10
+MAX_STEPS = 300
 
 WANDB_PROJECT = "qwen3-4b-grpo"
 WANDB_RUNNAME = "qwen3-4b-grpo"
 WANDB_ENTITY = "mssfj-1"
+
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b")
+OPENROUTER_TIMEOUT = int(os.getenv("OPENROUTER_TIMEOUT", "120"))
 
 SYSTEM_PROMPT = ("""
 You are a careful mathematical problem solver.
@@ -64,14 +70,24 @@ In <plan>, describe the logical steps required to solve the problem.
 
 The plan must be sufficient for another solver to reproduce the solution.
 
-In <verify>, explain why the planned solution is valid.
+In <verify>, perform exactly ONE minimal check to catch the most likely error.
 
-- Check that all given information is used exactly once.
-- Confirm that no assumptions contradict the problem.
-- Explain why the method guarantees a unique correct answer.
+Start <verify> with exactly one line:
+VERIFY_TYPE: SUBSTITUTE | ESTIMATE | EDGECASE | CONSISTENCY
 
-Do NOT redo the calculation.
-Do NOT introduce new steps.
+Rules:
+- Do exactly ONE check. No second check, no alternatives.
+- Do NOT redo the solution or introduce new steps.
+- Keep <verify> to 2–4 sentences.
+
+Type requirements:
+SUBSTITUTE: Substitute the final result into the original condition and show one key equation/inequality.
+ESTIMATE: Give a quick numeric bound and show the result lies within it.
+EDGECASE: Check one small or boundary case and state the expected outcome.
+CONSISTENCY: Check one invariant (units, parity, monotonicity, count).
+
+If the check fails, state it fails in one sentence.
+No filler text.
 
 In <reason>, carry out the full logical reasoning and calculations.
 
@@ -158,10 +174,31 @@ _tag_patterns = {
     for tag in ("analyze", "plan", "verify", "reason")
 }
 
+def _extract_tag_text(text, tag):
+    match = _tag_patterns[tag].search(text)
+    if not match:
+        return None
+    content = match.group(1).strip()
+    if not content:
+        return None
+    return content
+
 def _token_len(text):
     return len(tokenizer(text, add_special_tokens=False).input_ids)
 
 _math_verify_config = MathVerifyConfig(require_final_answer=True)
+
+_openrouter_alignment_cache = {}
+
+_OPENROUTER_ALIGNMENT_SYSTEM = (
+    "You are a strict evaluator of plan-following in math solutions. "
+    "Check whether each step in <reason> follows the strategy declared in <plan>. "
+    "Flag any extra assumptions not in the plan or any contradictions with the plan. "
+    "Output exactly two lines:\n"
+    "SCORE: <float between 0 and 1>\n"
+    "VERDICT: PASS or FAIL\n"
+    "No other text."
+)
 
 def _analyze_gate_passes(text, min_len=64, min_alpha=8):
     """
@@ -190,6 +227,80 @@ def _analyze_gate_passes(text, min_len=64, min_alpha=8):
         return False
 
     return True
+
+def _call_openrouter(api_key, messages, model, timeout):
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "messages": messages,
+    }
+    resp = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers=headers,
+        json=payload,
+        timeout=timeout,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"OpenRouter API error {resp.status_code}: {resp.text}")
+    data = resp.json()
+    if "error" in data:
+        raise RuntimeError(
+            f"OpenRouter API error payload: {data['error'].get('message', data['error'])}"
+        )
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError) as exc:
+        raise RuntimeError(f"Unexpected API response: {data}") from exc
+
+
+def _parse_openrouter_alignment(text):
+    score = None
+    verdict = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        upper = line.upper()
+        if upper.startswith("SCORE:"):
+            value = line.split(":", 1)[1].strip()
+            try:
+                score = float(value)
+            except ValueError:
+                score = None
+        elif upper.startswith("VERDICT:"):
+            verdict_value = line.split(":", 1)[1].strip().upper()
+            if verdict_value in {"PASS", "FAIL"}:
+                verdict = verdict_value
+    if score is None and verdict is None:
+        raise ValueError(f"Unparseable OpenRouter response: {text}")
+    if score is None:
+        score = 1.0 if verdict == "PASS" else 0.0
+    if verdict is None:
+        verdict = "PASS" if score >= 0.5 else "FAIL"
+    score = max(0.0, min(1.0, score))
+    return score, verdict
+
+
+def _evaluate_plan_reason_alignment(plan_text, reason_text, api_key, model, timeout):
+    messages = [
+        {"role": "system", "content": _OPENROUTER_ALIGNMENT_SYSTEM},
+        {
+            "role": "user",
+            "content": (
+                "<plan>\n"
+                f"{plan_text}\n"
+                "</plan>\n\n"
+                "<reason>\n"
+                f"{reason_text}\n"
+                "</reason>\n"
+            ),
+        },
+    ]
+    response = _call_openrouter(api_key, messages, model, timeout)
+    return _parse_openrouter_alignment(response)
 
 def reward_math_verify(completions, answer=None, **kwargs):
     """
@@ -234,6 +345,51 @@ def reward_math_verify(completions, answer=None, **kwargs):
             correctness_reward = R_CORRECT if is_correct else R_INCORRECT
         rewards.append(correctness_reward)
         
+    return rewards
+
+
+def reward_plan_reason_alignment(completions, **kwargs):
+    """
+    OpenRouter を使って <plan> と <reason> の整合性を評価する。
+    """
+    api_key = kwargs.pop("_openrouter_api_key", None) or os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        return [0.0] * len(completions)
+
+    model = kwargs.pop("_openrouter_model", None) or OPENROUTER_MODEL
+    timeout = int(kwargs.pop("_openrouter_timeout", OPENROUTER_TIMEOUT))
+    pass_reward = float(kwargs.pop("_alignment_pass_reward", 1.0))
+    fail_reward = float(kwargs.pop("_alignment_fail_reward", -1.0))
+    missing_penalty = float(kwargs.pop("_alignment_missing_penalty", -0.5))
+
+    rewards = []
+    for comp in completions:
+        text = _extract_completion_text(comp)
+        plan_text = _extract_tag_text(text, "plan")
+        reason_text = _extract_tag_text(text, "reason")
+        if not plan_text or not reason_text:
+            rewards.append(missing_penalty)
+            continue
+
+        cache_key = (plan_text, reason_text, model)
+        if cache_key in _openrouter_alignment_cache:
+            score = _openrouter_alignment_cache[cache_key]
+        else:
+            try:
+                score, verdict = _evaluate_plan_reason_alignment(
+                    plan_text, reason_text, api_key, model, timeout
+                )
+            except Exception as exc:
+                print(f"OpenRouter alignment eval failed: {exc}")
+                rewards.append(0.0)
+                continue
+            _openrouter_alignment_cache[cache_key] = score
+
+        print(f"**** Plan-reason alignment SCORE: {score} ****")
+        
+        reward = fail_reward + score * (pass_reward - fail_reward)
+        rewards.append(reward)
+
     return rewards
 
 
@@ -391,7 +547,12 @@ wandb.init(project=WANDB_PROJECT, entity=WANDB_ENTITY, name=WANDB_RUNNAME)
 trainer = GRPOTrainer(
     model=model,
     processing_class=tokenizer,
-    reward_funcs=[reward_math_verify, reward_tag_token_length, reward_required_tags_once],
+    reward_funcs=[
+        reward_math_verify,
+        reward_plan_reason_alignment,
+        reward_tag_token_length,
+        reward_required_tags_once,
+    ],
 	args=training_args,
     train_dataset=dataset,
 )
